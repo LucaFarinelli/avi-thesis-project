@@ -1,0 +1,4 @@
+Tutorial cv2 (gestore immagini)
+https://docs.opencv.org/4.x/d6/d00/tutorial_py_root.html
+
+https://www.youtube.com/watch?v=0e0b0WSLRNA

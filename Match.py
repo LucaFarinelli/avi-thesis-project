@@ -25,9 +25,7 @@ def find_best_match(
     shoes = cursor.fetchall()
     conn.close()
 
-    print(
-        f"Trovate {len(shoes)} scarpe nel database (escludendo ultimi {exclude_recent_seconds} secondi)"
-    )
+    #print(f"Trovate {len(shoes)} scarpe nel database (escludendo ultimi {exclude_recent_seconds} secondi)")
 
     best_match = None
     best_score = -1.0
@@ -40,7 +38,7 @@ def find_best_match(
         compare_path = path_cont if comparison_type == "contorno" else path_orig
 
         if os.path.exists(compare_path):
-            print(f"Confrontando con: {compare_path}")
+            #print(f"Confrontando con: {compare_path}")
 
             # Metodi di confronto semplificati (solo contorno)
             sim_score = compare_images(input_image_path, compare_path, "similarity")
@@ -55,23 +53,23 @@ def find_best_match(
                 img1_res = cv.resize(img1_debug, (500, 900))
                 img2_res = cv.resize(img2_debug, (500, 900))
                 direct_ssim, _ = structural_similarity(img1_res, img2_res, full=True)
-                print(f"Direct SSIM (solo resize): {direct_ssim:.4f}")
+                #print(f"Direct SSIM (solo resize): {direct_ssim:.4f}")
 
             # Score combinato semplice: media tra similarità e istogramma per contorno
             combined_score = (
                 sim_score + hist_score
             ) / 2  # Solo contorno esterno, senza dettagli
 
-            print(f" Similarity (contorno): {sim_score:.4f}")
-            print(f" Histogram (contorno): {hist_score:.4f}")
-            print(f" Score contorno combinato: {combined_score:.4f}")
+            # print(f" Similarity (contorno): {sim_score:.4f}")
+            # print(f" Histogram (contorno): {hist_score:.4f}")
+            # print(f" Score contorno combinato: {combined_score:.4f}")
 
             results.append(
                 {
                     "id": shoe_id,
                     "nome": nome,
                     "similarity": sim_score,
-                    "histogram": hist_score,  # Riaggiunto
+                    "histogram": hist_score, 
                     "combined": combined_score,
                     "path_originale": path_orig,
                     "path_contorno": path_cont,
@@ -88,6 +86,6 @@ def find_best_match(
     # Ordina per score combinato (ora semplice media per contorno)
     results.sort(key=lambda x: x["combined"], reverse=True)
 
-    print(f"Miglior score contorno trovato: {best_score:.4f}")
+   # print(f"Miglior score contorno trovato: {best_score:.4f}")
 
     return best_match, results

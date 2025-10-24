@@ -56,13 +56,13 @@ def get_last_inserted_shoe():
 
     if result:
         shoe_id, nome, path_orig, path_cont, created_at = result
-        print(f"\n ULTIMA SCARPA INSERITA:")
-        print(f"   ID: {shoe_id}")
-        print(f"   Nome: {nome}")
-        print(f"   Path originale: {path_orig}")
-        print(f"   Path contorno: {path_cont}")
-        print(f"   Inserita: {created_at}")
-        print("------------------------------------------")
+        # print(f"\n ULTIMA SCARPA INSERITA:")
+        # print(f"   ID: {shoe_id}")
+        # print(f"   Nome: {nome}")
+        # print(f"   Path originale: {path_orig}")
+        # print(f"   Path contorno: {path_cont}")
+        # print(f"   Inserita: {created_at}")
+        # print("------------------------------------------")
         return result
     else:
         print("Nessuna scarpa trovata nel database")

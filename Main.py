@@ -1,84 +1,70 @@
 import cv2 as cv
 import sys
 import os
+os.environ['QT_LOGGING_RULES'] = 'qt.qpa.plugin=false' #OpenCv cerca  plugin QT Wayland ma sistema sta usando X11
 import numpy as np
 import Config
 import Match
+import Utils  # Nuovo: importa funzioni utili per calcolo taglia
 
 def resize_keep_aspect(img, target_size, extra_padding=(0, 0)):
-    """
-    Ridimensiona mantenendo l'aspetto e aggiunge padding nero per raggiungere target_size.
-    Evita stretching. Permette di aggiungere padding extra sopra e sotto.
-    """
-    h, w = img.shape[:2] # estraggo altezza e  larghezza  dall'immmagine
-    target_h, target_w = target_size #estraggi altezza e larghezza dalla finestra target
-    scale = min(target_w / w, target_h / h) #calcolo fattore in scala per ridimensionare  immagine
-    new_w = int(w * scale)
-    new_h = int(h * scale)
-    resized = cv.resize(img, (new_w, new_h)) #ridimension immagine in base alle nuove misure calcolate
+    '''
+        Funzione che ridimensiona l'immagine di input in base ad una taglia specifica 
+    '''
+    h, w = img.shape[:2]                                                        #estrae altezza h e larghezza w
+    target_h, target_w = target_size                                            #estrae dalla dimensione target relativamente h e w
+    scale = min(target_w / w, target_h / h)                                     #calcola fattore di ridimensionamento come minimo dei rapporti tra w e h per garantire ridimensionato
+    new_w = int(w * scale)                                                      #trovo la nuova w scalando quella originale e trasformando in intero
+    new_h = int(h * scale)                                                      #trovo la nuova h scalando quella originale e trasformando in intero
+    resized = cv.resize(img, (new_w, new_h))                                    #ridefinisco l'immagine basandomi sulle nuove dimensioni calcolate
 
-    # Padding per centrare
-    pad_h = target_h - new_h #calcolo padding per dim_immagine = dim_target
-    pad_w = target_w - new_w
-    # divido padding verticale in due parti per centrare immagine
-    top = (pad_h // 2) + extra_padding[0]  # Aggiungi padding extra sopra
-    bottom = pad_h - (pad_h // 2) + extra_padding[1]  # Aggiungi padding extra sotto
-    #divido padding orizzontale in 2 parti per centrare img
-    left = pad_w // 2
-    right = pad_w - left
-    padded = cv.copyMakeBorder(
+    pad_h = target_h - new_h                                                    #calcola il padding totoale in altezza
+    pad_w = target_w - new_w                                                    #calcola il padding totoale in lunghezza
+    top = (pad_h // 2) + extra_padding[0]                                       #calcola riempimento superiore come metà del riempimento in altezza+riempimento sup. aggiuntivo
+    bottom = pad_h - (pad_h // 2) + extra_padding[1]                            #calcola riempimento inferiore come metà del riempimento in altezza+riempimento inf. aggiuntivo
+    left = pad_w // 2                                                           #calcola riempimento a sx come metà del riempimento in  w
+    right = pad_w - left                                                        #calcola rimpimento a dx come come il riempimento in w - riempimento a sx già calcolato
+    padded = cv.copyMakeBorder(                                                 #aggiungo bordi all'immagine ridimensionata usando il padding
         resized, top, bottom, left, right, cv.BORDER_CONSTANT, value=[0, 0, 0]
-    )# aggiungo padding calcolato alla mia immagine ridimensionata (con colore nero)
-    print(
-        f"Dimensioni originali: {img.shape}, scalate: {new_w}x{new_h}, finali: {target_size}, padding extra: {extra_padding}"
     )
     return padded
 
 def normalize_shoe_image(img):
-    """
-    Raddrizza la scarpa se inclinata, senza ritaglio pesante.
-    Mantiene orientamento verticale e ridimensiona mantenendo aspetto.
-    """
+    '''
+        Raddrizza la scarpa se inclinata, senza ritaglio pesante.
+        Mantiene orientamento verticale e ridimensiona mantenendo aspetto.    
+    '''
     img_copy = img.copy()
-
-    gray = cv.cvtColor(img_copy, cv.COLOR_BGR2GRAY) #converto colore in grigio
-    blur = cv.GaussianBlur(gray, (5, 5), 0) #sfocatura per ridurrre rumore e dettagli inutili
-    edges = cv.Canny(blur, 50, 150) # alg rilevamento bordi
+    gray = cv.cvtColor(img_copy, cv.COLOR_BGR2GRAY)
+    blur = cv.GaussianBlur(gray, (5, 5), 0)
+    edges = cv.Canny(blur, 50, 150)
     contours, _ = cv.findContours(edges, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
 
     if not contours:
-        # Se non trova contorni, ridimensiona mantenendo aspetto
-        return resize_keep_aspect(img_copy, (700, 1000)) 
+        return resize_keep_aspect(img_copy, (700, 1000))
 
-    largest_contour = max(contours, key=cv.contourArea) #trova contorno più largo tra quelli trvoati
-    rect = cv.minAreaRect(largest_contour) #calcolo rettangolo di area minima per contener contorno 
-    center, (width, height), angle = rect #estraggo dimensioni dal rettangolo calcoclato
+    largest_contour = max(contours, key=cv.contourArea)
+    rect = cv.minAreaRect(largest_contour)
+    center, (width, height), angle = rect
 
-    # angolo detectato
-    print(f"Debug: width={width}, height={height}, angle={angle}")
-
-    # Normalizza l'angolo in modo che la scarpa resti verticale
     if width < height:
         angle = -angle
     else:
-        angle = -(angle + 90) #aggiungo offset di 90 gradi
+        angle = -(angle + 90)
 
-    # Necessario per evitare rotazione di 180°
     if angle < -90:
         angle += 180
     elif angle > 90:
         angle -= 180
 
-    # Ignora rotazioni se l'angolo è vicino a 0 (entro una soglia)
-    if abs(angle) < 10:  # Soglia di ±10 gradi
-        rotated = img_copy  
+    if abs(angle) < 10:
+        rotated = img_copy
     else:
         (h, w) = img_copy.shape[:2]
         center = (w // 2, h // 2)
-        M = cv.getRotationMatrix2D(center, angle, 1.0)  #matrice di rotazione
-        rotated = cv.warpAffine(img_copy, M, (w, h))  # applico trasformazione all'immagine
+        M = cv.getRotationMatrix2D(center, angle, 1.0)
+        rotated = cv.warpAffine(img_copy, M, (w, h))
 
-    # Ridimensiona mantenendo aspetto, senza stretching
     final_img = resize_keep_aspect(rotated, (700, 1000))
     return final_img
 
@@ -88,93 +74,80 @@ shoes_path = input("Inserire nome scarpa da cercare: ")
 path = f"images/{shoes_path}.jpg"
 img = cv.imread(path)
 
-# Funzione per pulire il database da path errati
-# print("🧹 Pulizia database...")
-# Config.clean_invalid_paths()
-# print("✅ Pulizia completata")
-
 if img is not None:
-    # Normalizza l'immagine originale
     img_normalized = normalize_shoe_image(img)
 
-    # Elabora l'immagine normalizzata per trovare i contorni
-    gray = cv.cvtColor(
-        img_normalized, cv.COLOR_BGR2GRAY
-    )  # Usa img_normalized per coerenza
+    # Nuovo: Calcola taglia usando funzioni utili dal precedente codice
+    # Pre-processa per segmentazione
+    preprocessed = Utils.preprocess(img_normalized)
+    clustered = Utils.kMeans_cluster(preprocessed)
+    edged = Utils.edgeDetection(clustered)
+    boundRect, contours, contours_poly, _ = Utils.getBoundingBox(edged)
+    
+    if len(boundRect) < 1:
+        print("Errore: Nessun contorno suola trovato. Verifica immagine.")
+    else:
+        # Calcola lunghezza suola in cm (usa A4 come scala)
+        pcropedImg = img_normalized  # Usa normalizzata come "paper"
+        sole_size_cm = Utils.calcFeetSize(pcropedImg, boundRect) / 10  # mm a cm
+        print(f"Lunghezza suola: {sole_size_cm:.2f} cm")
+        
+        # Mappa a taglia
+        size = Utils.getSizeFromLength(sole_size_cm)
+        print(f"Taglia stimata: EU: {size['EU']}, US: {size['US']}, UK: {size['UK']}")
+
+    # Procedi con estrazione contorni e match forma/DB (dal tuo codice originale)
+    gray = cv.cvtColor(img_normalized, cv.COLOR_BGR2GRAY)
     blur = cv.GaussianBlur(gray, (5, 5), 0)
     edges = cv.Canny(blur, 50, 150)
     contours, _ = cv.findContours(edges, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
 
-    # Crea copia per disegnare i contorni
     img_with_contours = img_normalized.copy()
-    cv.drawContours(
-        img_with_contours, contours, -1, (0, 255, 0), 2
-    )  
+    cv.drawContours(img_with_contours, contours, -1, (0, 255, 0), 2)
 
-    # Salva l'immagine con contorni temporaneamente per il confronto
     temp_contour_path = "temp/scarpa_contorni_temp.jpg"
     os.makedirs("temp", exist_ok=True)
     cv.imwrite(temp_contour_path, img_with_contours)
 
     last_shoe = Config.get_last_inserted_shoe()
 
-    print("Cercando match nel database...")
     best_match, all_results = Match.find_best_match(temp_contour_path, "contorno")
 
-    # Definisci soglia di similarità (es. 0.85 = 85% di similarità)
-    SIMILARITY_THRESHOLD = 0.85
+    SIMILARITY_THRESHOLD = 0.95
 
     if best_match and best_match["combined"] >= SIMILARITY_THRESHOLD:
-        print(f"\n------------ MATCH TROVATO! -----------------")
-        print(f"ID Scarpa: {best_match['id']}")
-        print(f"Nome: {best_match['nome']}")
-        print(f"Similarity Score: {best_match['similarity']:.4f}")
-        print(f"Histogram Score: {best_match['histogram']:.4f}")
-        print(
-            f"Score Combinato: {best_match['combined']:.4f}"
-        )  
 
-        # Mostra confronto visivo
+        print(f"Best match details: {best_match}")  # Add this line to inspect the match object
+        print(f"Combined similarity: {best_match['combined']}")
+
+        print(f"Forma: {best_match['nome']}")
+
         input_img = cv.imread(temp_contour_path)
         match_img = cv.imread(best_match["path_contorno"])
 
         if match_img is not None:
-            fixed_size = (700, 1000)  # (width, height) – verticale standard
-            extra_padding = (50, 50)  # Padding extra top/bottom
-
-            # Ridimensiona mantenendo l'aspetto e aggiungi padding extra
+            fixed_size = (700, 1000)
+            extra_padding = (50, 50)
             input_resized = resize_keep_aspect(input_img, fixed_size, extra_padding)
             match_resized = resize_keep_aspect(match_img, fixed_size, extra_padding)
-
-            # Concatenazione orizzontale delle immagini
             comparison = np.hstack([input_resized, match_resized])
-
-            # Mostra la finestra con le immagini modificate
             cv.imshow("Input vs Best Match (scaled)", comparison)
             cv.waitKey(0)
             cv.destroyAllWindows()
 
     else:
-        print(
-            f"\n❌ Nessun match significativo trovato (soglia: {SIMILARITY_THRESHOLD})"
-        )
-        print("💾 Creando nuovo record nel database...")
+        print(f"\n La suola non assomiglia a nessuna forma (soglia: {SIMILARITY_THRESHOLD})")
+        print("Creando nuovo record nel database...")
 
-        # Salva l'immagine con contorni permanentemente
         permanent_contour_path = f"images/scarpa_contorni_{Config.get_next_id()}.jpg"
-        cv.imwrite(
-            permanent_contour_path, img_with_contours
-        )  # Salva la versione normalizzata con contorni
+        cv.imwrite(permanent_contour_path, img_with_contours)
 
-        # Salva nel database
         shoe_name = input("Inserisci il nome della scarpa: ") or "Scarpa Sconosciuta"
         new_id = Config.save_to_database(shoe_name, path, permanent_contour_path)
-        print(f"Nuova scarpa salvata con ID: {new_id}")
 
-    # Pulisci il file temporaneo
     if os.path.exists(temp_contour_path):
         os.remove(temp_contour_path)
 
 else:
-    print("❌ Impossibile caricare l'immagine")
+    print("Impossibile caricare l'immagine")
     sys.exit()

@@ -1,3 +1,4 @@
-/cod_inutile
-/debug
-/FeetAndShoeMeasurement
+# cartelle da ignorare (rooted)
+ /cod_inutile/
+ /debug/
+ /FeetAndShoeMeasurement//FeetAndShoeMeasurement/

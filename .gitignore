@@ -1,4 +1,23 @@
-# cartelle da ignorare (rooted)
- /cod_inutile/
- /debug/
- /FeetAndShoeMeasurement//FeetAndShoeMeasurement/
+# Python
+venv/
+__pycache__/
+*.pyc
+.env
+
+# Project specific
+/debug/
+/debug1/*
+!/debug1/.gitkeep
+/images/*
+!/images/.gitkeep
+/input/*
+!/input/.gitkeep
+/output/*
+!/output/.gitkeep
+/dbimage/*
+!/dbimage/.gitkeep
+
+# Legacy/Extra
+/cod_inutile/
+/FeetAndShoeMeasurement/
+/immagini/

@@ -1,0 +1,8 @@
+opencv-python
+mysql-connector-python
+scikit-image
+scikit-learn
+numpy
+rembg[cpu]
+joblib
+pillow

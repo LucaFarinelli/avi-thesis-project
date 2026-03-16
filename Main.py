@@ -1,153 +1,427 @@
 import cv2 as cv
 import sys
+import shutil
 import os
-os.environ['QT_LOGGING_RULES'] = 'qt.qpa.plugin=false' #OpenCv cerca  plugin QT Wayland ma sistema sta usando X11
+import time
 import numpy as np
+
+# Impostiamo il backend di matplotlib in modalità non-interattiva
+# per evitare crash quando viene chiamato da thread in background (es. Tkinter)
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+import joblib
+
+os.environ['QT_LOGGING_RULES'] = 'qt.qpa.plugin=false'
+
 import Config
 import Match
-import Utils  # Nuovo: importa funzioni utili per calcolo taglia
-
-def resize_keep_aspect(img, target_size, extra_padding=(0, 0)):
-    '''
-        Funzione che ridimensiona l'immagine di input in base ad una taglia specifica 
-    '''
-    h, w = img.shape[:2]                                                        #estrae altezza h e larghezza w
-    target_h, target_w = target_size                                            #estrae dalla dimensione target relativamente h e w
-    scale = min(target_w / w, target_h / h)                                     #calcola fattore di ridimensionamento come minimo dei rapporti tra w e h per garantire ridimensionato
-    new_w = int(w * scale)                                                      #trovo la nuova w scalando quella originale e trasformando in intero
-    new_h = int(h * scale)                                                      #trovo la nuova h scalando quella originale e trasformando in intero
-    resized = cv.resize(img, (new_w, new_h))                                    #ridefinisco l'immagine basandomi sulle nuove dimensioni calcolate
-
-    pad_h = target_h - new_h                                                    #calcola il padding totoale in altezza
-    pad_w = target_w - new_w                                                    #calcola il padding totoale in lunghezza
-    top = (pad_h // 2) + extra_padding[0]                                       #calcola riempimento superiore come metà del riempimento in altezza+riempimento sup. aggiuntivo
-    bottom = pad_h - (pad_h // 2) + extra_padding[1]                            #calcola riempimento inferiore come metà del riempimento in altezza+riempimento inf. aggiuntivo
-    left = pad_w // 2                                                           #calcola riempimento a sx come metà del riempimento in  w
-    right = pad_w - left                                                        #calcola rimpimento a dx come come il riempimento in w - riempimento a sx già calcolato
-    padded = cv.copyMakeBorder(                                                 #aggiungo bordi all'immagine ridimensionata usando il padding
-        resized, top, bottom, left, right, cv.BORDER_CONSTANT, value=[0, 0, 0]
-    )
-    return padded
-
-def normalize_shoe_image(img):
-    '''
-        Raddrizza la scarpa se inclinata, senza ritaglio pesante.
-        Mantiene orientamento verticale e ridimensiona mantenendo aspetto.    
-    '''
-    img_copy = img.copy()
-    gray = cv.cvtColor(img_copy, cv.COLOR_BGR2GRAY)
-    blur = cv.GaussianBlur(gray, (5, 5), 0)
-    edges = cv.Canny(blur, 50, 150)
-    contours, _ = cv.findContours(edges, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
-
-    if not contours:
-        return resize_keep_aspect(img_copy, (700, 1000))
-
-    largest_contour = max(contours, key=cv.contourArea)
-    rect = cv.minAreaRect(largest_contour)
-    center, (width, height), angle = rect
-
-    if width < height:
-        angle = -angle
-    else:
-        angle = -(angle + 90)
-
-    if angle < -90:
-        angle += 180
-    elif angle > 90:
-        angle -= 180
-
-    if abs(angle) < 10:
-        rotated = img_copy
-    else:
-        (h, w) = img_copy.shape[:2]
-        center = (w // 2, h // 2)
-        M = cv.getRotationMatrix2D(center, angle, 1.0)
-        rotated = cv.warpAffine(img_copy, M, (w, h))
-
-    final_img = resize_keep_aspect(rotated, (700, 1000))
-    return final_img
+import Utils
+import Homography
+from rembg import remove
 
 cv.setUseOptimized(True)
-shoes_path = input("Inserire nome scarpa da cercare: ")
 
-path = f"images/{shoes_path}.jpg"
-img = cv.imread(path)
+# Dimensioni standard per l'elaborazione delle immagini (larghezza x altezza in pixel)
+TARGET_WIDTH = 700
+TARGET_HEIGHT = 1000
 
-if img is not None:
-    img_normalized = normalize_shoe_image(img)
+# Soglia minima di similarità combinata per considerare un match valido
+SIMILARITY_THRESHOLD = 0.60
 
-    # Nuovo: Calcola taglia usando funzioni utili dal precedente codice
-    # Pre-processa per segmentazione
-    preprocessed = Utils.preprocess(img_normalized)
-    clustered = Utils.kMeans_cluster(preprocessed)
-    edged = Utils.edgeDetection(clustered)
-    boundRect, contours, contours_poly, _ = Utils.getBoundingBox(edged)
-    
-    if len(boundRect) < 1:
-        print("Errore: Nessun contorno suola trovato. Verifica immagine.")
+# Percorso del modello SVM per i difetti
+MODEL_PATH = "shoe_svm_model.pkl"
+
+
+def capture_from_webcam():
+    """Cattura un'immagine dalla webcam con anteprima e guide visive.
+
+    Returns:
+        Tupla (image, path) con l'immagine acquisita e il suo percorso di salvataggio,
+        oppure (None, None) se la cattura viene annullata.
+    """
+    cap = cv.VideoCapture(0)
+
+    if not cap.isOpened():
+        print("Errore: impossibile aprire la webcam.")
+        print("Controlla che la webcam sia collegata e non sia usata da altri programmi.")
+        return None, None
+
+    print("\n" + "=" * 50)
+    print("MODALITA' WEBCAM ATTIVATA")
+    print("=" * 50)
+    print("\nISTRUZIONI:")
+    print("1. Inquadra la scarpa nel rettangolo bianco")
+    print("2. Premi SPACE o ENTER per scattare")
+    print("3. Premi 'q' sulla finestra per uscire")
+    print("\n" + "=" * 50)
+
+    target_aspect = TARGET_HEIGHT / TARGET_WIDTH
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print("Errore nella cattura del frame.")
+            break
+
+        h, w = frame.shape[:2]
+        current_aspect = h / w
+
+        if current_aspect > target_aspect:
+            new_h = int(w * target_aspect)
+            y_start = (h - new_h) // 2
+            cropped = frame[y_start:y_start + new_h, :]
+        else:
+            new_w = int(h / target_aspect)
+            x_start = (w - new_w) // 2
+            cropped = frame[:, x_start:x_start + new_w]
+
+        preview = cv.resize(cropped, (TARGET_WIDTH // 2, TARGET_HEIGHT // 2))
+
+        preview_display = np.full(
+            (TARGET_HEIGHT // 2 + 100, TARGET_WIDTH // 2, 3),
+            (50, 50, 50), dtype=np.uint8
+        )
+        preview_display[50:50 + (TARGET_HEIGHT // 2), :] = preview
+
+        cv.rectangle(
+            preview,
+            (50, 50), (preview.shape[1] - 50, preview.shape[0] - 50),
+            (255, 255, 255), 2
+        )
+
+        center_x = preview.shape[1] // 2
+        center_y = preview.shape[0] // 2
+        cv.line(preview, (center_x, 0), (center_x, preview.shape[0]), (0, 255, 0), 1)
+        cv.line(preview, (0, center_y), (preview.shape[1], center_y), (0, 255, 0), 1)
+
+        cv.putText(preview_display, "ANTEPRIMA WEBCAM", (10, 30),
+                   cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        cv.putText(preview_display, f"Risoluzione: {w}x{h}",
+                   (10, preview_display.shape[0] - 70),
+                   cv.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+        cv.putText(preview_display, "Premi SPACE/ENTER per scattare",
+                   (10, preview_display.shape[0] - 40),
+                   cv.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        cv.putText(preview_display, "Premi 'q' per uscire",
+                   (10, preview_display.shape[0] - 10),
+                   cv.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 1)
+
+        cv.imshow("Anteprima Webcam - [q] esci | [SPACE] scatta", preview_display)
+
+        key = cv.waitKey(1) & 0xFF
+
+        if key == ord('q'):
+            print("Modalita' webcam annullata.")
+            cap.release()
+            cv.destroyAllWindows()
+            return None, None
+
+        elif key == 32 or key == 13:  # SPACE o ENTER
+            print("Foto scattata.")
+            final_image = cropped.copy()
+
+            cap.release()
+            cv.destroyAllWindows()
+            cv.waitKey(100)
+
+            timestamp = int(time.time())
+            filename = f"webcam_{timestamp}.jpg"
+            path = f"input/{filename}"
+            cv.imwrite(path, final_image)
+
+            preview_final = cv.resize(final_image, (400, 570))
+            cv.imshow("Foto scattata - Premi un tasto per continuare", preview_final)
+            cv.waitKey(1000)
+            cv.destroyAllWindows()
+
+            print(f"[OK] Immagine salvata in: {path}")
+            return final_image, path
+
+    cap.release()
+    cv.destroyAllWindows()
+    return None, None
+
+
+# Removed show_a4_guide
+
+def acquire_image():
+    """Gestisce il menu di selezione della sorgente immagine (file o webcam).
+
+    Returns:
+        Tupla (image, path)
+    """
+    print("\n" + "=" * 50)
+    print("SISTEMA DI RICONOSCIMENTO SCARPE (AVI)")
+    print("=" * 50)
+
+    print("\nMODALITA' INPUT DISPONIBILI:")
+    print("   1 - Da file immagine (.jpg, .png)")
+    print("   2 - Da webcam (scatta foto)")
+
+    while True:
+        scelta = input("\nScegli modalita' (1/2): ").strip()
+
+        if scelta == "1":
+            print("\nMODALITA' FILE SELEZIONATA")
+            shoes_path = input("Inserisci nome file (senza estensione): ").strip()
+
+            extensions = ['.jpg', '.jpeg', '.png', '.JPG', '.JPEG', '.PNG']
+            img = None
+            path = None
+
+            for ext in extensions:
+                test_path = f"input/{shoes_path}{ext}"
+                if os.path.exists(test_path):
+                    img = cv.imread(test_path)
+                    if img is not None:
+                        path = test_path
+                        print(f"[OK] File trovato: {path}")
+                        break
+
+            if img is None:
+                print(f"[ERRORE] Nessun file trovato con nome '{shoes_path}' nella cartella 'input/'")
+                continue
+
+            return img, path
+
+        elif scelta == "2":
+            print("\nMODALITA' WEBCAM SELEZIONATA")
+
+            img, path = capture_from_webcam()
+
+            if img is None:
+                print("[ERRORE] Cattura annullata, riprova.")
+                continue
+
+            return img, path
+
+        else:
+            print("[ERRORE] Scelta non valida. Inserisci 1 o 2.")
+            continue
+
+
+def process_image(img, path, is_ui=False):
+    """Esegue l'intera pipeline di elaborazione su un'immagine acquisita.
+
+    Pipeline:
+        1. Normalizzazione dimensioni (Simulazione Field of View telecamera)
+        2. Analisi texture LBP della suola
+        3. Analisi dei difetti tramite SVM
+        4. Rimozione Sfondo tramite rembg
+        5. Calcolo dimensioni industriali virtuali dal Bounding Box
+        6. Estrazione dettagli per matching
+        7. Ricerca nel database e visualizzazione
+
+    Args:
+        img: Immagine OpenCV in input.
+        path: Path del file immagine sull'hard disk.
+        is_ui: Booleano, se True disabilita cv.imshow che causano crash nei thread.
+    """
+    print(f"\n{'=' * 50}")
+    print("ELABORAZIONE IMMAGINE IN CORSO...")
+    print("=" * 50)
+
+    # Reset cartella debug1 per ogni esecuzione
+    DEBUG_DIR = "debug1"
+    if os.path.exists(DEBUG_DIR):
+        shutil.rmtree(DEBUG_DIR)
+    os.makedirs(DEBUG_DIR, exist_ok=True)
+
+    # 1. Normalizza dimensioni (Mantiene proporzioni per simulare distanza fissa Z telecamera)
+    img = Homography.ensure_standard_size(img, (TARGET_WIDTH, TARGET_HEIGHT))
+    cv.imwrite('debug1/03_normalized.jpg', img)
+    print(f"[OK] Immagine normalizzata a {TARGET_WIDTH}x{TARGET_HEIGHT}.")
+
+    height, width = img.shape[:2]
+
+    # 3b. Analisi texture LBP: converto in grigio (un solo canale) e calcolo il descrittore
+    img_gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+    img_lbp = Utils.lbp_vectorized(img_gray)
+
+    cv.imwrite('debug1/03b_lbp.jpg', img_lbp)
+
+    # plt.imshow(img[:, :, ::-1])  # BGR -> RGB per matplotlib
+    # plt.title("Immagine normalizzata")
+    # plt.show()
+
+    # plt.imshow(img_lbp, cmap="gray")
+    cv.imwrite('debug1/03b_lbp.jpg', img_lbp)
+
+    # 3c. Analisi dei difetti tramite SVM
+    if os.path.exists(MODEL_PATH):
+        try:
+            print("\nANALISI DIFETTI (SVM)...")
+            model = joblib.load(MODEL_PATH)
+            
+            # Rimozione Sfondo tramite rembg per analisi precisa
+            print("[INFO] Rimozione sfondo AI (rembg) in corso...")
+            img_no_bg = remove(img)
+            cv.imwrite('debug1/03_no_bg.png', img_no_bg)
+            
+            # Estrazione maschera dall'alpha channel di rembg
+            mask = img_no_bg[:, :, 3]
+            cv.imwrite('debug1/03c_mask.jpg', mask)
+            
+            # Estrazione combinata Texture(LBP) + Colore(HSV)
+            combined_features = Utils.extract_svm_features(img, mask_rembg=mask)
+            
+            # --- SALVATAGGIO GRAFICO HISTOGRAMMA PER TESI ---
+            plt.figure(figsize=(12, 5))
+            plt.bar(range(len(combined_features)), combined_features, color='indigo', alpha=0.8)
+            plt.title('Firma Unificata (LBP + HSV) della Scarpa Corrente')
+            plt.xlabel('Dimensione Vettore (LBP: 0-255 | HSV: 256-317)')
+            plt.ylabel('Valore feature normalizzato')
+            plt.grid(axis='y', alpha=0.3)
+            plt.savefig('debug1/03d_svm_unified_features.png', dpi=150, bbox_inches='tight')
+            plt.close()
+            # --------------------------------------------------
+            
+            prediction = model.predict([combined_features])[0]
+            
+            if prediction == 0:
+                print(">>> RISULTATO: Scarpa CONFORME (Nessun difetto rilevato)")
+            else:
+                print(">>> RISULTATO: Scarpa DIFETTOSA (Possibile anomalia rilevata)")
+                
+            # Mostra probabilità se il modello lo supporta
+            if hasattr(model, "predict_proba"):
+                probs = model.predict_proba([combined_features])[0]
+                # Mapping corretto basato sui nomi delle classi del modello
+                class_probs = {int(c): p for c, p in zip(model.classes_, probs)}
+                p_conforme = class_probs.get(0, 0.0)
+                p_difettosa = class_probs.get(1, 0.0)
+                print(f"Probabilità - Conforme: {p_conforme:.2%}, Difettosa: {p_difettosa:.2%}")
+        except Exception as e:
+            print(f"[AVVISO] Errore durante la predizione SVM: {e}")
     else:
-        # Calcola lunghezza suola in cm (usa A4 come scala)
-        pcropedImg = img_normalized  # Usa normalizzata come "paper"
-        sole_size_cm = Utils.calcFeetSize(pcropedImg, boundRect) / 10  # mm a cm
-        print(f"Lunghezza suola: {sole_size_cm:.2f} cm")
-        
-        # Mappa a taglia
+        print("\n[AVVISO] Modello SVM non trovato. Salta analisi difetti.")
+
+    # 4. Calcola Dimensioni Industriali Simulare
+    print("\nCALCOLO DIMENSIONI E TAGLIA (Simulazione Industriale)...")
+    length_mm, width_mm, bounding_box = Utils.calc_industrial_size(mask)
+    
+    if bounding_box:
+        sole_size_cm = length_mm / 10
+        print(f"Dimensioni stimate (Calibrazione Virtuale): L {length_mm:.1f}mm - W {width_mm:.1f}mm")
         size = Utils.getSizeFromLength(sole_size_cm)
-        print(f"Taglia stimata: EU: {size['EU']}, US: {size['US']}, UK: {size['UK']}")
+        print(f"Taglia stimata -> EU: {size['EU']}  US: {size['US']}  UK: {size['UK']}")
+        
+        # Disegno quote per demo / tesi
+        x, y, w, h = bounding_box
+        blueprint_img = img.copy()
+        cv.rectangle(blueprint_img, (x, y), (x+w, y+h), (0, 0, 255), 2)
+        cv.putText(blueprint_img, f"L: {length_mm:.1f}mm", (x, max(y - 10, 20)), cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        cv.putText(blueprint_img, f"W: {width_mm:.1f}mm", (min(x + w + 10, TARGET_WIDTH - 150), y + h // 2), cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        cv.imwrite('debug1/04_dimensions.jpg', blueprint_img)
+    else:
+        print("[ATTENZIONE] Impossibile calcolare dimensioni: maschera vuota.")
 
-    # Procedi con estrazione contorni e match forma/DB (dal tuo codice originale)
-    gray = cv.cvtColor(img_normalized, cv.COLOR_BGR2GRAY)
-    blur = cv.GaussianBlur(gray, (5, 5), 0)
-    edges = cv.Canny(blur, 50, 150)
-    contours, _ = cv.findContours(edges, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+    # 5. Estrai maschera rembg e DETTAGLI INTERNI per matching
+    print("\nESTRAZIONE RIFERIMENTO DETTAGLIATO PER MATCHING...")
+    
+    # 5a. Scarpa pulita (colori reali)
+    shoe_only = cv.bitwise_and(img, img, mask=mask)
+    
+    # 5b. Dettagli Interni (Lacci, Loghi, Cuciture)
+    # Applichiamo Canny sulla scarpa pulita per ignorare lo sfondo rimosso
+    gray_shoe = cv.cvtColor(shoe_only, cv.COLOR_BGR2GRAY)
+    internal_edges = cv.Canny(gray_shoe, 50, 150)
+    cv.imwrite('debug1/05a_internal_edges.jpg', internal_edges) # Salvataggio per tesi
+    
+    # Creiamo un'immagine di riferimento che combina Colore + Bordi Interni
+    # I bordi bianchi aiutano l'algoritmo di similarità a trovare "ancore" strutturali
+    reference_img = shoe_only.copy()
+    reference_img[internal_edges > 0] = [255, 255, 255] # Overlay bordi bianchi
+    
+    cv.imwrite('debug1/05b_high_detail_reference.jpg', reference_img)
 
-    img_with_contours = img_normalized.copy()
-    cv.drawContours(img_with_contours, contours, -1, (0, 255, 0), 2)
+    temp_contour_path = "images/scarpa_contorni_temp.jpg"
+    cv.imwrite(temp_contour_path, reference_img)
+    print(f"[OK] Riferimento High-Detail salvato: {temp_contour_path}")
 
-    temp_contour_path = "temp/scarpa_contorni_temp.jpg"
-    os.makedirs("temp", exist_ok=True)
-    cv.imwrite(temp_contour_path, img_with_contours)
-
-    last_shoe = Config.get_last_inserted_shoe()
-
+    # 6. Cerca match nel database
+    print("\nRICERCA MATCH NEL DATABASE...")
     best_match, all_results = Match.find_best_match(temp_contour_path, "contorno")
 
-    SIMILARITY_THRESHOLD = 0.95
-
     if best_match and best_match["combined"] >= SIMILARITY_THRESHOLD:
+        print(f"\n{'=' * 50}")
+        print("MATCH TROVATO")
+        print("=" * 50)
+        print(f"Modello:     {best_match['nome']}")
+        print(f"Match Globale: {best_match['combined']:.2%}")
+        print(f"  - Colore(HST): {best_match['histogram']:.2%} | Texture(SSIM): {best_match['similarity']:.2%}")
+        print(f"  - Struttura(ORB): {best_match['orb']:.2%}  | Forma(SHP):  {best_match['shape']:.2%}")
 
-        print(f"Best match details: {best_match}")  # Add this line to inspect the match object
-        print(f"Combined similarity: {best_match['combined']}")
-
-        print(f"Forma: {best_match['nome']}")
+        output_path = "output/scarpa_1.jpg"
+        cv.imwrite(output_path, img)
+        print(f"[OK] Immagine salvata: {output_path}")
 
         input_img = cv.imread(temp_contour_path)
         match_img = cv.imread(best_match["path_contorno"])
 
         if match_img is not None:
-            fixed_size = (700, 1000)
+            fixed_size = (TARGET_WIDTH, TARGET_HEIGHT)
             extra_padding = (50, 50)
-            input_resized = resize_keep_aspect(input_img, fixed_size, extra_padding)
-            match_resized = resize_keep_aspect(match_img, fixed_size, extra_padding)
+            input_resized = Utils.resize_keep_aspect(input_img, fixed_size, extra_padding)
+            match_resized = Utils.resize_keep_aspect(match_img, fixed_size, extra_padding)
             comparison = np.hstack([input_resized, match_resized])
-            cv.imshow("Input vs Best Match (scaled)", comparison)
-            cv.waitKey(0)
-            cv.destroyAllWindows()
+
+            cv.imwrite('debug1/06_comparison.jpg', comparison)
+            
+            if not is_ui:
+                # Non bloccare il programma se siamo in modalità UI
+                print("[INFO] Visualizzazione confronto...")
+                cv.imshow("CONFRONTO: Input vs Database", comparison)
+                cv.waitKey(2000) # Aspetta 2 secondi anziché all'infinito
+                # cv.destroyAllWindows() # Evitiamo di chiudere subito per permettere all'utente di vedere
+            else:
+                print("[INFO] Matro trovato. Confronto salvato in debug1/06_comparison.jpg")
 
     else:
-        print(f"\n La suola non assomiglia a nessuna forma (soglia: {SIMILARITY_THRESHOLD})")
-        print("Creando nuovo record nel database...")
+        print(f"\n{'=' * 50}")
+        print("NUOVA SCARPA RILEVATA")
+        print("=" * 50)
+        print(f"Nessun match trovato (soglia: {SIMILARITY_THRESHOLD:.0%})")
 
-        permanent_contour_path = f"images/scarpa_contorni_{Config.get_next_id()}.jpg"
-        cv.imwrite(permanent_contour_path, img_with_contours)
+        next_id = Config.get_next_id()
+        output_path = f"output/scarpa_{next_id}.jpg"
+        cv.imwrite(output_path, img)
+        print(f"[OK] Immagine salvata: {output_path}")
 
-        shoe_name = input("Inserisci il nome della scarpa: ") or "Scarpa Sconosciuta"
-        new_id = Config.save_to_database(shoe_name, path, permanent_contour_path)
+        permanent_contour_path = f"images/scarpa_contorni_{next_id}.jpg"
+        cv.imwrite(permanent_contour_path, reference_img)
 
+        shoe_name = input("\nInserisci nome modello scarpa: ").strip() or "Scarpa Sconosciuta"
+        
+        print("\nQuesta scarpa e' conforme o difettosa?")
+        print("   0 - Conforme (Buona)")
+        print("   1 - Difettosa (Scarto)")
+        label_input = input("Scelta (0/1, default 0): ").strip()
+        label = 1 if label_input == "1" else 0
+        
+        new_id = Config.save_to_database(shoe_name, path, permanent_contour_path, label=label)
+        print(f"[OK] Nuova scarpa salvata con ID: {new_id} (Etichetta: {label})")
+
+    # Rimuovi file temporaneo
     if os.path.exists(temp_contour_path):
         os.remove(temp_contour_path)
 
-else:
-    print("Impossibile caricare l'immagine")
-    sys.exit()
+    print(f"\n{'=' * 50}")
+    print("PROCESSO COMPLETATO CON SUCCESSO")
+    print("=" * 50)
+
+
+def main():
+    img, path = acquire_image()
+
+    if img is None:
+        print("[ERRORE] Impossibile procedere: nessuna immagine valida.")
+        sys.exit(1)
+
+    process_image(img, path, is_ui=False)
+
+
+if __name__ == "__main__":
+    main()

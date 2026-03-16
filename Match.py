@@ -5,17 +5,25 @@ from skimage.metrics import structural_similarity
 from Compare import compare_images
 
 
-def find_best_match(
-    input_image_path, comparison_type="contorno", exclude_recent_seconds=10
-):
-    """Trova la scarpa più simile nel database, escludendo quelle inserite di recente"""
+def find_best_match(input_image_path, comparison_type="contorno", exclude_recent_seconds=10):
+    """Trova la scarpa più simile nel database.
 
-    conn = mysql.connector.connect(
-        host="127.0.0.1", user="luca", password="password", database="SCARPE"
-    )
+    Esclude le scarpe inserite negli ultimi `exclude_recent_seconds` secondi
+    per evitare che la scarpa appena salvata venga confrontata con se stessa.
+
+    Args:
+        input_image_path: Path all'immagine di input (contorno o originale).
+        comparison_type: "contorno" per confrontare i contorni, altrimenti usa l'immagine originale.
+        exclude_recent_seconds: Intervallo in secondi entro cui escludere scarpe inserite di recente.
+
+    Returns:
+        Tupla (best_match, all_results) dove best_match è un dizionario con i dati
+        della scarpa più simile, o None se nessuna scarpa è nel database.
+    """
+    from Config import DB_CONFIG
+    conn = mysql.connector.connect(**DB_CONFIG)
     cursor = conn.cursor()
 
-    # Esclude scarpe inserite negli ultimi X minuti
     query = """
     SELECT idScarpa, nome_scarpa, path_originale, path_contorno
     FROM dataset
@@ -25,8 +33,6 @@ def find_best_match(
     shoes = cursor.fetchall()
     conn.close()
 
-    #print(f"Trovate {len(shoes)} scarpe nel database (escludendo ultimi {exclude_recent_seconds} secondi)")
-
     best_match = None
     best_score = -1.0
     results = []
@@ -34,58 +40,45 @@ def find_best_match(
     for shoe in shoes:
         shoe_id, nome, path_orig, path_cont = shoe
 
-        # Scegli quale immagine confrontare
         compare_path = path_cont if comparison_type == "contorno" else path_orig
 
-        if os.path.exists(compare_path):
-            #print(f"Confrontando con: {compare_path}")
-
-            # Metodi di confronto semplificati (solo contorno)
-            sim_score = compare_images(input_image_path, compare_path, "similarity")
-            hist_score = compare_images(
-                input_image_path, compare_path, "histogram"
-            )  # Riaggiunto per robustezza
-
-            # DEBUG: Confronta direttamente senza preprocessing
-            img1_debug = cv.imread(input_image_path, cv.IMREAD_GRAYSCALE)
-            img2_debug = cv.imread(compare_path, cv.IMREAD_GRAYSCALE)
-            if img1_debug is not None and img2_debug is not None:
-                img1_res = cv.resize(img1_debug, (500, 900))
-                img2_res = cv.resize(img2_debug, (500, 900))
-                direct_ssim, _ = structural_similarity(img1_res, img2_res, full=True)
-                #print(f"Direct SSIM (solo resize): {direct_ssim:.4f}")
-
-            # Score combinato semplice: media tra similarità e istogramma per contorno
-            combined_score = (
-                sim_score + hist_score
-            ) / 2  # Solo contorno esterno, senza dettagli
-
-            # print(f" Similarity (contorno): {sim_score:.4f}")
-            # print(f" Histogram (contorno): {hist_score:.4f}")
-            # print(f" Score contorno combinato: {combined_score:.4f}")
-
-            results.append(
-                {
-                    "id": shoe_id,
-                    "nome": nome,
-                    "similarity": sim_score,
-                    "histogram": hist_score, 
-                    "combined": combined_score,
-                    "path_originale": path_orig,
-                    "path_contorno": path_cont,
-                }
-            )
-
-            if combined_score > best_score:
-                best_score = combined_score
-                best_match = results[-1]
-
-        else:
+        if not os.path.exists(compare_path):
             print(f"File non trovato: {compare_path}")
+            continue
 
-    # Ordina per score combinato (ora semplice media per contorno)
+        sim_score = compare_images(input_image_path, compare_path, "similarity")
+        hist_score = compare_images(input_image_path, compare_path, "histogram")
+        
+        # Le due nuove metriche strutturali per evitare match tra Top vs Suola
+        orb_score = compare_images(input_image_path, compare_path, "orb")
+        shape_score = compare_images(input_image_path, compare_path, "shape")
+        
+        # Penalizzazione Strutturale Inversa
+        # Se la forma (shape) o le geometrie (orb) sono molto basse (es < 20%),
+        # è matematicamente scorretto che siano la stessa vista. Abbattiamo lo score combinato.
+        str_penalty = 1.0
+        if shape_score < 0.20 or orb_score < 0.10:
+            str_penalty = 0.5 # Dimezza il punteggio finale se la struttura è totalmente diversa
+            
+        # Media pesata (Diamo più peso a Colore e SSIM, ma ORB/Shape fungono da validatori)
+        combined_score = ((sim_score * 0.4) + (hist_score * 0.4) + (orb_score * 0.1) + (shape_score * 0.1)) * str_penalty
+
+        results.append({
+            "id": shoe_id,
+            "nome": nome,
+            "similarity": sim_score,
+            "histogram": hist_score,
+            "orb": orb_score,
+            "shape": shape_score,
+            "combined": combined_score,
+            "path_originale": path_orig,
+            "path_contorno": path_cont,
+        })
+
+        if combined_score > best_score:
+            best_score = combined_score
+            best_match = results[-1]
+
     results.sort(key=lambda x: x["combined"], reverse=True)
-
-   # print(f"Miglior score contorno trovato: {best_score:.4f}")
 
     return best_match, results

@@ -205,23 +205,15 @@ def acquire_image():
             continue
 
 
-def process_image(img, path, is_ui=False, callback=None):
+def process_image(img, path, is_ui=False, callback=None, result_callback=None):
     """Esegue l'intera pipeline di elaborazione su un'immagine acquisita.
-
-    Pipeline:
-        1. Normalizzazione dimensioni (Simulazione Field of View telecamera)
-        2. Analisi texture LBP della suola
-        3. Analisi dei difetti tramite SVM
-        4. Rimozione Sfondo tramite rembg
-        5. Calcolo dimensioni industriali virtuali dal Bounding Box
-        6. Estrazione dettagli per matching
-        7. Ricerca nel database e visualizzazione
 
     Args:
         img: Immagine OpenCV in input.
         path: Path del file immagine sull'hard disk.
         is_ui: Booleano, se True disabilita cv.imshow che causano crash nei thread.
         callback: Opzionale, funzione da chiamare per aggiornare un visualizzatore esterno (UI).
+        result_callback: Opzionale, funzione da chiamare con il testo riepilogativo dei risultati.
     """
     print(f"\n{'=' * 50}")
     print("ELABORAZIONE IMMAGINE IN CORSO...")
@@ -346,6 +338,14 @@ def process_image(img, path, is_ui=False, callback=None):
                 p_difettosa = class_probs.get(1, 0.0)
                 
                 if p_conforme >= p_difettosa:
+                    svm_verdict = "CONFORME ✅ (Nessun difetto rilevato)"
+                else:
+                    svm_verdict = "DIFETTOSA ❌ (Possibile anomalia rilevata)"
+                _svm_result_text = (
+                    f">>> RISULTATO SVM: Scarpa {svm_verdict}\n"
+                    f"    Probabilità  ->  Conforme: {p_conforme:.2%}   |   Difettosa: {p_difettosa:.2%}"
+                )
+                if p_conforme >= p_difettosa:
                     print(">>> RISULTATO: Scarpa CONFORME (Nessun difetto rilevato)")
                 else:
                     print(">>> RISULTATO: Scarpa DIFETTOSA (Possibile anomalia rilevata)")
@@ -358,6 +358,7 @@ def process_image(img, path, is_ui=False, callback=None):
                     print(">>> RISULTATO: Scarpa DIFETTOSA (Possibile anomalia rilevata)")
         except Exception as e:
             print(f"[AVVISO] Errore durante la predizione SVM: {e}")
+            _svm_result_text = f"[AVVISO] Errore durante la predizione SVM: {e}"
     else:
         print("\n[AVVISO] Modello SVM non trovato. Salta analisi difetti.")
 
@@ -365,11 +366,16 @@ def process_image(img, path, is_ui=False, callback=None):
     print("\nCALCOLO DIMENSIONI E TAGLIA (Simulazione Industriale)...")
     length_mm, width_mm, bounding_box = Utils.calc_industrial_size(mask, pixel_per_mm=cfg.PIXEL_PER_MM)
     
+    _dim_text = "Dimensioni non calcolate: maschera vuota." # Default value
     if bounding_box:
         sole_size_cm = length_mm / 10
         print(f"Dimensioni stimate (Calibrazione Virtuale): L {length_mm:.1f}mm - W {width_mm:.1f}mm")
         size = Utils.getSizeFromLength(sole_size_cm)
         print(f"Taglia stimata -> EU: {size['EU']}  US: {size['US']}  UK: {size['UK']}")
+        _dim_text = (
+            f"Dimensioni stimulate: L {length_mm:.1f}mm  |  W {width_mm:.1f}mm\n"
+            f"Taglia stimata  ->  EU: {size['EU']}   US: {size['US']}   UK: {size['UK']}"
+        )
         
         # --- SANITY CHECK: Aspect Ratio (Lunghezza / Larghezza) ---
         length = max(length_mm, width_mm)
@@ -454,7 +460,6 @@ def process_image(img, path, is_ui=False, callback=None):
             if img1 is not None and img2 is not None:
                 hsv1 = cv.cvtColor(cv.resize(img1, (700, 1000)), cv.COLOR_BGR2HSV)
                 hsv2 = cv.cvtColor(cv.resize(img2, (700, 1000)), cv.COLOR_BGR2HSV)
-                # Istogrammi 1D su H per visualizzazione semplice
                 hist1 = cv.calcHist([hsv1], [0], None, [180], [0, 180])
                 hist2 = cv.calcHist([hsv2], [0], None, [180], [0, 180])
                 plt.figure(figsize=(10, 4))
@@ -466,7 +471,6 @@ def process_image(img, path, is_ui=False, callback=None):
                 plt.legend()
                 plt.savefig('debug1/thesis_05_hsv_comparison.png', dpi=150, bbox_inches='tight')
                 plt.close()
-            # -------------------------------------------
 
             fixed_size = (TARGET_WIDTH, TARGET_HEIGHT)
             extra_padding = (50, 50)
@@ -476,6 +480,21 @@ def process_image(img, path, is_ui=False, callback=None):
 
             cv.imwrite('debug1/06_comparison.jpg', comparison)
             if callback: callback('debug1/06_comparison.jpg')
+
+            # Invia il riepilogo completo al result_callback
+            if result_callback:
+                summary = (
+                    f"{_svm_result_text}\n"
+                    f"{_dim_text}\n"
+                    f"\n"
+                    f"Match Trovato: {best_match['nome']}\n"
+                    f"Score Globale: {best_match['combined']:.2%}\n"
+                    f"  Colore(HSV): {best_match['histogram']:.2%}  |  Texture(SSIM): {best_match['similarity']:.2%}\n"
+                    f"  Struttura(ORB): {best_match['orb']:.2%}  |  Forma(SHP): {best_match['shape']:.2%}\n"
+                    f"\n"
+                    f"Ulteriori immagini di debug disponibili in: cartella debug1/"
+                )
+                result_callback(summary)
             
             if not is_ui:
                 # Non bloccare il programma se siamo in modalità UI

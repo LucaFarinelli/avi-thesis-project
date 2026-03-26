@@ -174,9 +174,9 @@ class ShoeRecognitionApp:
         )
         btn_close.pack(pady=12, anchor="w", ipadx=5, ipady=20)
 
-        # --- Pannello Visualizzazione Immagine (Destra) ---
+        # --- Pannello Visualizzazione Immagine (Destra, in alto) ---
         self.image_view_frame = tk.Frame(main_frame, bg=self.bg_color, bd=0, highlightthickness=0)
-        self.image_view_frame.grid(row=2, column=1, rowspan=3, sticky='nsew', padx=(20, 40), pady=(10, 25))
+        self.image_view_frame.grid(row=2, column=1, rowspan=2, sticky='nsew', padx=(20, 40), pady=(5, 6))
         
         self.image_label = tk.Label(
             self.image_view_frame, 
@@ -186,6 +186,36 @@ class ShoeRecognitionApp:
             fg="#9ca3af"
         )
         self.image_label.pack(expand=True, fill="both", padx=10, pady=10)
+
+        # --- Box Risultati (Destra, sotto l'imagebox) ---
+        results_frame = tk.Frame(main_frame, bg="#162d58", bd=0, highlightthickness=1,
+                                 highlightbackground="#334155")
+        results_frame.grid(row=4, column=1, rowspan=2, sticky='nsew', padx=(20, 40), pady=(0, 20))
+
+        results_title = tk.Label(
+            results_frame,
+            text="📊 Risultati Analisi",
+            font=("Segoe UI", 10, "bold"),
+            bg="#162d58",
+            fg="#93c5fd",
+            anchor="w"
+        )
+        results_title.pack(fill="x", padx=10, pady=(6, 2))
+
+        sep_res = tk.Frame(results_frame, height=1, bg="#334155")
+        sep_res.pack(fill="x", padx=10, pady=(0, 4))
+
+        self.results_label = tk.Label(
+            results_frame,
+            text="In attesa di elaborazione...",
+            font=("Consolas", 9),
+            bg="#162d58",
+            fg="#94a3b8",
+            anchor="nw",
+            justify="left",
+            wraplength=550
+        )
+        self.results_label.pack(fill="both", expand=True, padx=10, pady=(0, 6))
 
         # --- Status bar ---
         status_frame = tk.Frame(main_frame, bg=self.bg_color)
@@ -296,36 +326,39 @@ class ShoeRecognitionApp:
         self.img_checked = ImageTk.PhotoImage(img_ch)
 
     def update_image_display(self, img_path):
-        """Aggiorna l'immagine nel pannello di destra in modo thread-safe"""
+        """Aggiorna l'immagine nel pannello di destra in modo thread-safe, con delay di 2s tra le immagini."""
+        import time
+        time.sleep(2)  # Pausa visibile tra i passaggi
         def _update():
             try:
                 if not os.path.exists(img_path):
                     return
                 
-                # Carica immagine
                 img = Image.open(img_path)
                 
-                # Ottieni dimensioni del frame (o usa default se non ancora renderizzato)
                 target_w = self.image_view_frame.winfo_width() - 20
                 target_h = self.image_view_frame.winfo_height() - 20
                 
                 if target_w < 100: target_w = 600
-                if target_h < 100: target_h = 800
+                if target_h < 100: target_h = 500
                 
-                # Ridimensiona mantenendo l'aspect ratio
                 img.thumbnail((target_w, target_h), Image.Resampling.LANCZOS)
                 
-                # Converti per Tkinter
                 photo = ImageTk.PhotoImage(img)
                 self.image_label.config(image=photo, text="")
-                self.image_label.image = photo # Mantieni riferimento per evitare garbage collection
+                self.image_label.image = photo
                 
             except Exception as e:
                 print(f"[ERRORE] Aggiornamento immagine: {e}")
         
-        # Schedula l'aggiornamento nel thread principale di Tkinter
         self.root.after(0, _update)
-       
+
+    def update_results_display(self, text):
+        """Aggiorna il box dei risultati in modo thread-safe."""
+        def _update():
+            self.results_label.config(text=text, fg="#e2e8f0")
+        self.root.after(0, _update)
+
     def get_selected_object(self):
         """Ritorna il tipo di oggetto selezionato"""
         return self.object_var.get()
@@ -398,7 +431,9 @@ class ShoeRecognitionApp:
             self.update_status("⚙️ Elaborazione in corso...", self.accent_color)
             
             print(f"[INFO] Tipo oggetto: {object_type}")
-            Main.process_image(img, file_path, is_ui=True, callback=self.update_image_display)
+            Main.process_image(img, file_path, is_ui=True, 
+                               callback=self.update_image_display,
+                               result_callback=self.update_results_display)
             
             self.update_status("✅ Elaborazione completata!", self.success_color)
             self.safe_messagebox("Successo", f"Elaborazione di {object_type} completata con successo!")
@@ -425,7 +460,9 @@ class ShoeRecognitionApp:
             self.update_status("⚙️ Elaborazione in corso...", self.accent_color)
             
             print(f"[INFO] Tipo oggetto: {object_type}")
-            Main.process_image(img, path, is_ui=True, callback=self.update_image_display)
+            Main.process_image(img, path, is_ui=True, 
+                               callback=self.update_image_display,
+                               result_callback=self.update_results_display)
             
             self.update_status("✅ Elaborazione completata!", self.success_color)
             self.safe_messagebox("Successo", f"Elaborazione di {object_type} completata con successo!")
@@ -452,15 +489,4 @@ class ShoeRecognitionApp:
 if __name__ == "__main__":
     root = tk.Tk()
     app = ShoeRecognitionApp(root)
-    
-    try:
-        from PIL import Image, ImageTk
-        icon_path = os.path.join(os.path.dirname(__file__), "favicon.ico")
-        if os.path.exists(icon_path):
-            img = Image.open(icon_path)
-            icon = ImageTk.PhotoImage(img)
-            root.iconphoto(True, icon)
-    except Exception as e:
-        print(f"[AVVISO] Impossibile caricare l'icona: {e}")
-        
     root.mainloop()

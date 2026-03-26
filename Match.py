@@ -3,6 +3,7 @@ import mysql.connector
 import cv2 as cv
 from skimage.metrics import structural_similarity
 from Compare import compare_images
+import config_settings as cfg
 
 
 def find_best_match(input_image_path, comparison_type="contorno", exclude_recent_seconds=10):
@@ -54,14 +55,17 @@ def find_best_match(input_image_path, comparison_type="contorno", exclude_recent
         shape_score = compare_images(input_image_path, compare_path, "shape")
         
         # Penalizzazione Strutturale Inversa
-        # Se la forma (shape) o le geometrie (orb) sono molto basse (es < 20%),
-        # è matematicamente scorretto che siano la stessa vista. Abbattiamo lo score combinato.
         str_penalty = 1.0
-        if shape_score < 0.20 or orb_score < 0.10:
-            str_penalty = 0.5 # Dimezza il punteggio finale se la struttura è totalmente diversa
+        if shape_score < cfg.SHAPE_PENALTY_THRESHOLD or orb_score < cfg.ORB_PENALTY_THRESHOLD:
+            str_penalty = cfg.PENALTY_FACTOR
             
-        # Media pesata (Diamo più peso a Colore e SSIM, ma ORB/Shape fungono da validatori)
-        combined_score = ((sim_score * 0.4) + (hist_score * 0.4) + (orb_score * 0.1) + (shape_score * 0.1)) * str_penalty
+        # Media pesata strutturata dai config (Diamo più peso a Colore e SSIM, ma ORB/Shape fungono da validatori)
+        combined_score = (
+            (sim_score * cfg.WEIGHT_SIMILARITY) +
+            (hist_score * cfg.WEIGHT_HISTOGRAM) +
+            (orb_score * cfg.WEIGHT_ORB) +
+            (shape_score * cfg.WEIGHT_SHAPE)
+        ) * str_penalty
 
         results.append({
             "id": shoe_id,

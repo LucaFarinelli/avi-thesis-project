@@ -2,6 +2,24 @@ from sklearn.cluster import KMeans
 import cv2 as cv
 import numpy as np
 import bisect
+import config_settings as cfg
+
+
+def generate_high_detail_reference(img, mask_rembg):
+    """
+    Crea un'immagine di riferimento ad alto dettaglio per il matching:
+    - isola l'oggetto (sovrapposizione img originle con maschera rembg)
+    - estrae i bordi interni e dettagli superficiali (Canny)
+    - sovrappone i bordi in bianco sull'immagine originale a colori
+    Restituisce l'immagine di riferimento pronta per il salvataggio o elaborazione ORB.
+    """
+    shoe_only = cv.bitwise_and(img, img, mask=mask_rembg)
+    gray_shoe = cv.cvtColor(shoe_only, cv.COLOR_BGR2GRAY)
+    internal_edges = cv.Canny(gray_shoe, 50, 150)
+    
+    reference_img = shoe_only.copy()
+    reference_img[internal_edges > 0] = [255, 255, 255] # Sovrapponi bordi bianchi
+    return reference_img
 
 
 def resize_keep_aspect(img, target_size, extra_padding=(0, 0)):
@@ -151,8 +169,56 @@ def extract_svm_features(img, mask_rembg=None):
     cv.normalize(hist_h, hist_h, 0, 1, cv.NORM_MINMAX)
     cv.normalize(hist_s, hist_s, 0, 1, cv.NORM_MINMAX)
     
-    # Crea vettore finale (256 + 30 + 32 = 318 dimensioni)
-    combined_features = np.concatenate([hist_lbp, hist_h.flatten(), hist_s.flatten()])
+    # Crea vettore finale: LBP(256) + H(30) + S(32) + Geometria(6) = 324 dimensioni
+    
+    # 3. Feature GEOMETRICHE / STRUTTURALI
+    # Fondamentali per rilevare pieghe, rotture, deformazioni e irregolarità del contorno
+    gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+    
+    # 3a. Edge Density: rapporto tra pixel di bordo e pixel totali dell'oggetto
+    # Un oggetto rotto/strappato ha MOLTI più bordi interni
+    shoe_gray = cv.bitwise_and(gray, gray, mask=mask_rembg)
+    edges = cv.Canny(shoe_gray, 50, 150)
+    total_pixels = np.count_nonzero(mask_rembg)
+    edge_pixels = np.count_nonzero(edges)
+    edge_density = edge_pixels / (total_pixels + 1e-7)
+    
+    # 3b. Compattezza del contorno: quanto è "regolare" la forma
+    # Oggetti integri hanno contorni lisci (compattezza alta), piegati/rotti hanno contorni frastagliati
+    contours, _ = cv.findContours(mask_rembg, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+    compactness = 0.0
+    solidity = 0.0
+    extent = 0.0
+    aspect_ratio_feat = 0.0
+    symmetry = 0.0
+    
+    if contours:
+        c = max(contours, key=cv.contourArea)
+        area = cv.contourArea(c)
+        perimeter = cv.arcLength(c, True)
+        compactness = (4 * np.pi * area) / (perimeter ** 2 + 1e-7) # 1.0 = cerchio perfetto
+        
+        # 3c. Solidità: area / area convex hull (oggetto schiacciato ha bassa solidità)
+        hull = cv.convexHull(c)
+        hull_area = cv.contourArea(hull)
+        solidity = area / (hull_area + 1e-7)
+        
+        # 3d. Aspect Ratio del bounding box
+        x, y, w, h = cv.boundingRect(c)
+        aspect_ratio_feat = max(w, h) / (min(w, h) + 1e-7)
+        
+        # 3e. Extent: rapporto area oggetto / area bounding box
+        extent = area / (w * h + 1e-7)
+        
+        # 3f. Simmetria verticale: confronto L/R della maschera
+        mid_x = mask_rembg.shape[1] // 2
+        left_half = np.count_nonzero(mask_rembg[:, :mid_x])
+        right_half = np.count_nonzero(mask_rembg[:, mid_x:])
+        symmetry = 1.0 - abs(left_half - right_half) / (total_pixels + 1e-7)
+    
+    geo_features = np.array([edge_density, compactness, solidity, aspect_ratio_feat, extent, symmetry])
+    
+    combined_features = np.concatenate([hist_lbp, hist_h.flatten(), hist_s.flatten(), geo_features])
     
     return combined_features
 

@@ -1,10 +1,10 @@
 import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
+from PIL import Image, ImageTk, ImageDraw
 import threading
 import os
 import sys
 
-# Importa i moduli principali
 import Main
 import Config
 
@@ -12,213 +12,320 @@ class ShoeRecognitionApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Sistema Riconoscimento Oggetti")
-        self.root.geometry("520x540")
-        self.root.resizable(False, False)
-        
-        # Impostazione stile moderno con tema 'clam'
+        self.root.attributes("-fullscreen", True)  # fullscreen funziona ora
+        # self.root.geometry("520x540")   # opzionale per debug
+        # self.root.resizable(False, False)
+
+        # Stile e colori
         self.style = ttk.Style()
         try:
             self.style.theme_use('clam')
         except:
-            pass  # Se 'clam' non è disponibile, usa il default
-        
-        # Colori personalizzati
-        self.bg_color = "#f5f5f7"
+            pass
+
+        self.bg_color = "#213d72"
         self.accent_color = "#3b82f6"
         self.success_color = "#10b981"
         self.warning_color = "#f59e0b"
         self.danger_color = "#ef4444"
-        self.text_color = "#1f2937"
-        
+        self.text_color = "#ffffff"
+
         self.root.configure(bg=self.bg_color)
-        
         self.is_processing = False
-        
-        # Configurazione stili per i widget
+
         self._configure_styles()
-        
-        # Frame principale con padding e bordo arrotondato (simulato con frame normale)
-        main_frame = tk.Frame(root, bg=self.bg_color, padx=30, pady=30)
+
+        # --- Frame principale (ora senza padding esterno per permettere full-width) ---
+        main_frame = tk.Frame(root, bg=self.bg_color)
         main_frame.pack(fill="both", expand=True)
+
+        # Configura griglia per main_frame
+        main_frame.grid_rowconfigure(0, weight=0)   # header
+        main_frame.grid_rowconfigure(1, weight=0)   # separatore
+        main_frame.grid_rowconfigure(2, weight=0)   # combobox
+        main_frame.grid_rowconfigure(3, weight=0)   # bottoni
+        main_frame.grid_rowconfigure(4, weight=1)   # opzioni (espandibile)
+        main_frame.grid_rowconfigure(5, weight=0)   # status
         
-        # Intestazione con icona testuale e sottotitolo
+        main_frame.grid_columnconfigure(0, weight=1) # Colonna Controlli
+        main_frame.grid_columnconfigure(1, weight=2) # Colonna Immagine (più larga)
+
+        # --- Header (ora a larghezza piena) ---
         header_frame = tk.Frame(main_frame, bg=self.bg_color)
-        header_frame.pack(fill="x", pady=(0, 20))
-        
+        header_frame.grid(row=0, column=0, columnspan=2, sticky='ew', pady=(30, 20))
+
+        title_frame = tk.Frame(header_frame, bg=self.bg_color)
+        title_frame.pack()
+
+        try:
+            img_sx = Image.open("logo_unife.png").resize((70, 70))
+            self.logo_sx = ImageTk.PhotoImage(img_sx)
+            logo_sx_label = tk.Label(title_frame, image=self.logo_sx, bg=self.bg_color)
+            logo_sx_label.pack(side="left", padx=(0, 10))
+
+            img_dx = Image.open("logo_unife.png").resize((70, 70))
+            self.logo_dx = ImageTk.PhotoImage(img_dx)
+            logo_dx_label = tk.Label(title_frame, image=self.logo_dx, bg=self.bg_color)
+        except Exception as e:
+            print(f"Errore caricamento immagini: {e}")
+
         title_label = tk.Label(
-            header_frame,
-            text="🔍 Sistema Riconoscimento Oggetti",
+            title_frame,
+            text="Automated Visual Inspection",
             font=("Segoe UI", 18, "bold"),
             bg=self.bg_color,
             fg=self.text_color
         )
-        title_label.pack()
-        
+        title_label.pack(side="left")
+        logo_dx_label.pack(side="left", padx=(10, 0))
+
         subtitle_label = tk.Label(
             header_frame,
             text="Seleziona il tipo di oggetto e avvia l'analisi",
             font=("Segoe UI", 10),
             bg=self.bg_color,
-            fg="#6b7280"
+            fg="#9ca3af"
         )
         subtitle_label.pack()
-        
-        # Separatore personalizzato (linea sottile)
+
+        # --- Separatore (ora a larghezza piena) ---
         separator = tk.Frame(main_frame, height=2, bg="#e5e7eb")
-        separator.pack(fill="x", pady=10)
-        
-        # Frame selezione oggetto
+        separator.grid(row=1, column=0, columnspan=2, sticky='ew', pady=10)
+
+        # --- Combobox (allineato a sinistra con margine) ---
         selection_frame = tk.Frame(main_frame, bg=self.bg_color)
-        selection_frame.pack(pady=10, fill="x")
-        
-        tk.Label(
-            selection_frame,
-            text="Tipo di oggetto:",
-            font=("Segoe UI", 11),
-            bg=self.bg_color,
-            fg=self.text_color
-        ).pack(side="left", padx=(0, 10))
-        
-        # Combobox con stile personalizzato
-        self.object_options = ["Shoes", "Smartphone", "Object"]
+        selection_frame.grid(row=2, column=0, sticky='w', padx=40, pady=(10,0))
+
+        self.object_options = ["Selezionare il tipo di oggetto", "Shoes", "Smartphone", "Laptop", "Watch", "Bottle"]
         self.object_var = tk.StringVar()
+        
         self.cb_object = ttk.Combobox(
             selection_frame,
             textvariable=self.object_var,
             values=self.object_options,
             state="readonly",
-            width=22,
-            font=("Segoe UI", 10)
+            style="Custom.TCombobox",
+            width=49,
+            font=("Segoe UI", 15, "bold"),
         )
-        self.cb_object.set("Shoes")
-        self.cb_object.pack(side="left")
+        self.cb_object.set("Selezionare il tipo di oggetto")
+        self.cb_object.pack(pady=12, anchor="w", ipady=15)   # margine sinistro già dato dal frame
+
+        # --- Griglia Opzioni (Checkbox Circolari) ---
+        options_frame = tk.Frame(main_frame, bg=self.bg_color)
+        options_frame.grid(row=4, column=0, sticky='nw', padx=40, pady=(0, 25))
         
-        # Frame per i bottoni principali (griglia 2x2?)
+        self.options_vars = {}
+        options_list = [
+            "Rimozione Sfondo (AI)", "Matching Geometrico (ORB)",
+            "Analisi Colore (HSV)", "Analisi Texture (LBP)",
+            "Rilevamento Bordi (Canny)", "Analisi Forma (Hu Moments)"
+        ]
+        
+        for i, opt in enumerate(options_list):
+            var = tk.BooleanVar(value=True if i==0 else False)
+            self.options_vars[opt] = var
+            cb = ttk.Checkbutton(
+                options_frame,
+                text=opt,
+                variable=var,
+                style="Circular.TCheckbutton"
+            )
+            # 2 colonne, 3 righe
+            cb.grid(row=i // 2, column=i % 2, sticky='w', padx=(0, 40), pady=6)
+
+        # --- Bottoni (impilati verticalmente, allineati a sinistra) ---
         buttons_frame = tk.Frame(main_frame, bg=self.bg_color)
-        buttons_frame.pack(pady=25, fill="both", expand=True)
-        
-        # Primo bottone: Carica da file
+        buttons_frame.grid(row=3, column=0, sticky='nw', padx=40, pady=(10, 25))
+
         btn_file = ttk.Button(
             buttons_frame,
             text="📁 Carica da File",
             command=self.process_from_file,
-            style="File.TButton"
+            style="File.TButton",
+            width=50
         )
-        btn_file.pack(pady=8, ipadx=10, ipady=8, fill="x")
-        
-        # Secondo bottone: Cattura da webcam
+        btn_file.pack(pady=12, anchor="w", ipadx=5, ipady=20)
+
         btn_webcam = ttk.Button(
             buttons_frame,
             text="📷 Cattura da Webcam",
             command=self.process_from_webcam,
-            style="Webcam.TButton"
+            style="Webcam.TButton",
+            width=50
         )
-        btn_webcam.pack(pady=8, ipadx=10, ipady=8, fill="x")
-        
-        # Terzo bottone: Pulisci database
+        btn_webcam.pack(pady=12, anchor="w", ipadx=5, ipady=20)
+
         btn_clean = ttk.Button(
             buttons_frame,
             text="🗑️ Pulisci Database",
             command=self.clean_database,
-            style="Clean.TButton"
+            style="Clean.TButton",
+            width=50
         )
-        btn_clean.pack(pady=8, ipadx=10, ipady=8, fill="x")
-        
-        # Quarto bottone: Chiudi Programma (Rosso)
+        btn_clean.pack(pady=12, anchor="w", ipadx=5, ipady=20)
+
         btn_close = ttk.Button(
             buttons_frame,
             text="❌ Chiudi Programma",
             command=self.quit_app,
-            style="Quit.TButton"
+            style="Quit.TButton",
+            width=50
         )
-        btn_close.pack(pady=8, ipadx=10, ipady=8, fill="x")
+        btn_close.pack(pady=12, anchor="w", ipadx=5, ipady=20)
+
+        # --- Pannello Visualizzazione Immagine (Destra) ---
+        self.image_view_frame = tk.Frame(main_frame, bg=self.bg_color, bd=0, highlightthickness=0)
+        self.image_view_frame.grid(row=2, column=1, rowspan=3, sticky='nsew', padx=(20, 40), pady=(10, 25))
         
-        # Frame per lo stato
+        self.image_label = tk.Label(
+            self.image_view_frame, 
+            text="ANTEPRIMA ELABORAZIONE", 
+            font=("Segoe UI", 12, "bold"),
+            bg=self.bg_color, 
+            fg="#9ca3af"
+        )
+        self.image_label.pack(expand=True, fill="both", padx=10, pady=10)
+
+        # --- Status bar ---
         status_frame = tk.Frame(main_frame, bg=self.bg_color)
-        status_frame.pack(fill="x", pady=(20, 0))
-        
-        # Etichetta di stato (tk.Label per poter cambiare colore facilmente)
+        status_frame.grid(row=5, column=0, columnspan=2, sticky='ew', padx=40, pady=(10, 0))
+
         self.status_label = tk.Label(
             status_frame,
             text="✅ Pronto",
-            font=("Segoe UI", 10),
+            font=("Segoe UI", 16, "bold"),
             bg=self.bg_color,
             fg=self.success_color,
             anchor="w"
         )
         self.status_label.pack(side="left")
-        
+
     def _configure_styles(self):
-        """Configura gli stili personalizzati per i bottoni ttk"""
-        # Stile base per tutti i bottoni
+        # Stile base per bottoni (dimensioni ragionevoli)
         self.style.configure(
             "Base.TButton",
-            font=("Segoe UI", 11, "bold"),
-            padding=(20, 8),
+            font=("Segoe UI", 25, "bold"),
+            padding=(40, 20),          # (orizzontale, verticale)
             borderwidth=0,
             focusthickness=0,
             focuscolor="none",
             relief="flat"
         )
-        
-        # Stile per bottone "Carica da File"
+
+        # Ereditano da Base.TButton
+        self.style.configure("File.TButton", parent="Base.TButton",
+                             background="#10b981", foreground="white", font=("Segoe UI", 15, "bold"))
+        self.style.map("File.TButton",
+                       background=[("active", "#059669"), ("pressed", "#047857")])
+
+        self.style.configure("Webcam.TButton", parent="Base.TButton",
+                             background="#3b82f6", foreground="white", font=("Segoe UI", 15, "bold"))
+        self.style.map("Webcam.TButton",
+                       background=[("active", "#2563eb"), ("pressed", "#1d4ed8")])
+
+        self.style.configure("Clean.TButton", parent="Base.TButton",
+                             background="#f59e0b", foreground="white", font=("Segoe UI", 15, "bold"))
+        self.style.map("Clean.TButton",
+                       background=[("active", "#d97706"), ("pressed", "#b45309")])
+
+        self.style.configure("Quit.TButton", parent="Base.TButton",
+                             background=self.danger_color, foreground="white", font=("Segoe UI", 15, "bold"))
+        self.style.map("Quit.TButton",
+                       background=[("active", "#dc2626"), ("pressed", "#b91c1c")])
+
+        # Stile per combobox (stessa altezza e font)
         self.style.configure(
-            "File.TButton",
-            background="#10b981",      # verde
-            foreground="white"
-        )
-        self.style.map(
-            "File.TButton",
-            background=[("active", "#059669"), ("pressed", "#047857")],
-            foreground=[("active", "white")]
-        )
-        
-        # Stile per bottone "Cattura da Webcam"
-        self.style.configure(
-            "Webcam.TButton",
-            background="#3b82f6",      # blu
-            foreground="white"
-        )
-        self.style.map(
-            "Webcam.TButton",
-            background=[("active", "#2563eb"), ("pressed", "#1d4ed8")],
-            foreground=[("active", "white")]
+            "Custom.TCombobox",
+            font=("Segoe UI", 25, "bold"),
+            padding=8,
+            fieldbackground="#334155", # Grigio fumo scuro
+            background="#334155",
+            foreground="white",
+            arrowcolor=self.accent_color
         )
         
-        # Stile per bottone "Pulisci Database"
-        self.style.configure(
-            "Clean.TButton",
-            background="#f59e0b",      # arancione
-            foreground="white"
-        )
-        self.style.map(
-            "Clean.TButton",
-            background=[("active", "#d97706"), ("pressed", "#b45309")],
-            foreground=[("active", "white")]
-        )
+        # --- Configurazione Font Dropdown (Menu a tendina) ---
+        # ttk.Style non influenza il Listbox interno del Combobox. 
+        # Bisogna usare option_add per modificare il font degli elementi nel menu.
+        self.root.option_add('*TCombobox*Listbox.font', ("Segoe UI", 15))
+        self.root.option_add('*TCombobox*Listbox.background', "#334155")
+        self.root.option_add('*TCombobox*Listbox.foreground', "white")
+        self.root.option_add('*TCombobox*Listbox.selectBackground', self.accent_color)
+        self.root.option_add('*TCombobox*Listbox.selectForeground', "white")
+
+        # --- Generazione Immagini Checkbox Circolari ---
+        self._create_round_checkbox_images()
+
+        # Layout per Circular.TCheckbutton
+        # Usiamo l'elemento 'Circular.indicator' creato dinamicamente
+        self.style.element_create("Circular.indicator", "image", 
+                                  self.img_unchecked, 
+                                  ("selected", self.img_checked))
         
-        # Stile per bottone "Chiudi" (Rosso)
-        self.style.configure(
-            "Quit.TButton",
-            background=self.danger_color,
-            foreground="white"
-        )
-        self.style.map(
-            "Quit.TButton",
-            background=[("active", "#dc2626"), ("pressed", "#b91c1c")],
-            foreground=[("active", "white")]
-        )
+        self.style.layout("Circular.TCheckbutton", [
+            ("Checkbutton.padding", {"sticky": "nswe", "children": [
+                ("Circular.indicator", {"side": "left", "sticky": ""}),
+                ("Checkbutton.label", {"side": "left", "sticky": ""})
+            ]})
+        ])
         
-        # Configurazione Combobox
-        self.style.configure(
-            "TCombobox",
-            fieldbackground="white",
-            background="white",
-            foreground=self.text_color,
-            arrowcolor=self.accent_color,
-            padding=5
-        )
+        self.style.configure("Circular.TCheckbutton", 
+                             font=("Segoe UI", 15, "bold"), 
+                             background=self.bg_color,
+                             foreground=self.text_color,
+                             padding=5)
+        self.style.map("Circular.TCheckbutton", 
+                       foreground=[("active", self.accent_color)])
+
+    def _create_round_checkbox_images(self, size=24):
+        """Crea dinamicamente le immagini per i checkbox circolari"""
+        # Immagine Unchecked (cerchio vuoto)
+        img_un = Image.new('RGBA', (size, size), (0,0,0,0))
+        draw_un = ImageDraw.Draw(img_un)
+        draw_un.ellipse([2, 2, size-3, size-3], outline="#9ca3af", width=2)
+        self.img_unchecked = ImageTk.PhotoImage(img_un)
+
+        # Immagine Checked (cerchio con pallino colorato)
+        img_ch = Image.new('RGBA', (size, size), (0,0,0,0))
+        draw_ch = ImageDraw.Draw(img_ch)
+        # Bordo
+        draw_ch.ellipse([2, 2, size-3, size-3], outline=self.accent_color, width=2)
+        # Nucleo (pallino)
+        draw_ch.ellipse([6, 6, size-7, size-7], fill=self.accent_color)
+        self.img_checked = ImageTk.PhotoImage(img_ch)
+
+    def update_image_display(self, img_path):
+        """Aggiorna l'immagine nel pannello di destra in modo thread-safe"""
+        def _update():
+            try:
+                if not os.path.exists(img_path):
+                    return
+                
+                # Carica immagine
+                img = Image.open(img_path)
+                
+                # Ottieni dimensioni del frame (o usa default se non ancora renderizzato)
+                target_w = self.image_view_frame.winfo_width() - 20
+                target_h = self.image_view_frame.winfo_height() - 20
+                
+                if target_w < 100: target_w = 600
+                if target_h < 100: target_h = 800
+                
+                # Ridimensiona mantenendo l'aspect ratio
+                img.thumbnail((target_w, target_h), Image.Resampling.LANCZOS)
+                
+                # Converti per Tkinter
+                photo = ImageTk.PhotoImage(img)
+                self.image_label.config(image=photo, text="")
+                self.image_label.image = photo # Mantieni riferimento per evitare garbage collection
+                
+            except Exception as e:
+                print(f"[ERRORE] Aggiornamento immagine: {e}")
         
+        # Schedula l'aggiornamento nel thread principale di Tkinter
+        self.root.after(0, _update)
+       
     def get_selected_object(self):
         """Ritorna il tipo di oggetto selezionato"""
         return self.object_var.get()
@@ -291,7 +398,7 @@ class ShoeRecognitionApp:
             self.update_status("⚙️ Elaborazione in corso...", self.accent_color)
             
             print(f"[INFO] Tipo oggetto: {object_type}")
-            Main.process_image(img, file_path, is_ui=True)
+            Main.process_image(img, file_path, is_ui=True, callback=self.update_image_display)
             
             self.update_status("✅ Elaborazione completata!", self.success_color)
             self.safe_messagebox("Successo", f"Elaborazione di {object_type} completata con successo!")
@@ -318,7 +425,7 @@ class ShoeRecognitionApp:
             self.update_status("⚙️ Elaborazione in corso...", self.accent_color)
             
             print(f"[INFO] Tipo oggetto: {object_type}")
-            Main.process_image(img, path, is_ui=True)
+            Main.process_image(img, path, is_ui=True, callback=self.update_image_display)
             
             self.update_status("✅ Elaborazione completata!", self.success_color)
             self.safe_messagebox("Successo", f"Elaborazione di {object_type} completata con successo!")
@@ -345,4 +452,15 @@ class ShoeRecognitionApp:
 if __name__ == "__main__":
     root = tk.Tk()
     app = ShoeRecognitionApp(root)
+    
+    try:
+        from PIL import Image, ImageTk
+        icon_path = os.path.join(os.path.dirname(__file__), "favicon.ico")
+        if os.path.exists(icon_path):
+            img = Image.open(icon_path)
+            icon = ImageTk.PhotoImage(img)
+            root.iconphoto(True, icon)
+    except Exception as e:
+        print(f"[AVVISO] Impossibile caricare l'icona: {e}")
+        
     root.mainloop()

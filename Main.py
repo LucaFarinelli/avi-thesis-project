@@ -19,19 +19,22 @@ import Config
 import Match
 import Utils
 import Homography
+import Compare
 from rembg import remove
+import config_settings as cfg
 
 cv.setUseOptimized(True)
 
-# Dimensioni standard per l'elaborazione delle immagini (larghezza x altezza in pixel)
-TARGET_WIDTH = 700
-TARGET_HEIGHT = 1000
+# Dimensioni standard per l'elaborazione delle immagini dalla configurazione globale
+TARGET_WIDTH = cfg.TARGET_WIDTH
+TARGET_HEIGHT = cfg.TARGET_HEIGHT
 
 # Soglia minima di similarità combinata per considerare un match valido
-SIMILARITY_THRESHOLD = 0.60
+SIMILARITY_THRESHOLD = cfg.SIMILARITY_THRESHOLD
 
 # Percorso del modello SVM per i difetti
-MODEL_PATH = "shoe_svm_model.pkl"
+MODEL_PATH = cfg.MODEL_PATH
+SCALER_PATH = cfg.SCALER_PATH
 
 
 def capture_from_webcam():
@@ -202,7 +205,7 @@ def acquire_image():
             continue
 
 
-def process_image(img, path, is_ui=False):
+def process_image(img, path, is_ui=False, callback=None):
     """Esegue l'intera pipeline di elaborazione su un'immagine acquisita.
 
     Pipeline:
@@ -218,20 +221,30 @@ def process_image(img, path, is_ui=False):
         img: Immagine OpenCV in input.
         path: Path del file immagine sull'hard disk.
         is_ui: Booleano, se True disabilita cv.imshow che causano crash nei thread.
+        callback: Opzionale, funzione da chiamare per aggiornare un visualizzatore esterno (UI).
     """
     print(f"\n{'=' * 50}")
     print("ELABORAZIONE IMMAGINE IN CORSO...")
     print("=" * 50)
 
-    # Reset cartella debug1 per ogni esecuzione
+    # Setup cartella debug1
     DEBUG_DIR = "debug1"
-    if os.path.exists(DEBUG_DIR):
-        shutil.rmtree(DEBUG_DIR)
     os.makedirs(DEBUG_DIR, exist_ok=True)
+    
+    # Pulizia selettiva: rimuoviamo i file delle esecuzioni precedenti
+    # MA preserviamo i grafici della tesi (prefix 'thesis_') generati dal trainer
+    for f in os.listdir(DEBUG_DIR):
+        if not f.startswith("thesis_") and f != ".gitkeep":
+            file_path = os.path.join(DEBUG_DIR, f)
+            try:
+                if os.path.isfile(file_path): os.remove(file_path)
+            except: pass
 
     # 1. Normalizza dimensioni (Mantiene proporzioni per simulare distanza fissa Z telecamera)
     img = Homography.ensure_standard_size(img, (TARGET_WIDTH, TARGET_HEIGHT))
-    cv.imwrite('debug1/03_normalized.jpg', img)
+    cv.imwrite('debug1/01_originale.jpg', img) # Salvataggio per tesi (Cap. 2)
+    cv.imwrite('debug1/03_normalized.jpg', img) # Compatibilità retroattiva
+    if callback: callback('debug1/01_originale.jpg')
     print(f"[OK] Immagine normalizzata a {TARGET_WIDTH}x{TARGET_HEIGHT}.")
 
     height, width = img.shape[:2]
@@ -258,14 +271,61 @@ def process_image(img, path, is_ui=False):
             # Rimozione Sfondo tramite rembg per analisi precisa
             print("[INFO] Rimozione sfondo AI (rembg) in corso...")
             img_no_bg = remove(img)
-            cv.imwrite('debug1/03_no_bg.png', img_no_bg)
+            cv.imwrite('debug1/02_rimozione_sfondo.png', img_no_bg) # Salvataggio per tesi (Cap. 2)
+            cv.imwrite('debug1/03_no_bg.png', img_no_bg) # Compatibilità
+            if callback: callback('debug1/02_rimozione_sfondo.png')
             
             # Estrazione maschera dall'alpha channel di rembg
             mask = img_no_bg[:, :, 3]
-            cv.imwrite('debug1/03c_mask.jpg', mask)
+            cv.imwrite('debug1/03_maschera_alpha.jpg', mask) # Salvataggio per tesi (Cap. 2)
+            cv.imwrite('debug1/03c_mask.jpg', mask) # Compatibilità
             
-            # Estrazione combinata Texture(LBP) + Colore(HSV)
+            # --- PASSAGGI LBP PER TESI (CAP. 2.4) ---
+            # Mappa LBP mascherata (solo scarpa)
+            masked_lbp = cv.bitwise_and(img_lbp, img_lbp, mask=mask)
+            cv.imwrite('debug1/03e_masked_lbp.jpg', masked_lbp)
+            
+            # Istogramma LBP puro (usando la funzione di Utils)
+            hist_lbp_only = Utils.calc_lbp_histogram(img_lbp, mask=mask)
+            plt.figure(figsize=(10, 4))
+            plt.plot(hist_lbp_only, color='blue')
+            plt.fill_between(range(256), hist_lbp_only, color='blue', alpha=0.3)
+            plt.title('Istogramma dei descrittori LBP (Firma della Texture)')
+            plt.xlabel('Codice LBP (0-255)')
+            plt.ylabel('Frequenza normalizzata')
+            plt.xlim([0, 255])
+            plt.grid(True, alpha=0.2)
+            plt.savefig('debug1/03f_lbp_histogram.png', dpi=150, bbox_inches='tight')
+            plt.close()
+            # ----------------------------------------
+            
+            # --- PASSAGGI AGGIUNTIVI PER DOCUMENTAZIONE TESI (CAP. 2) ---
+            print("[INFO] Generazione passaggi intermedi per la tesi...")
+            # K-Means (usando la funzione di Utils)
+            img_rgb_no_bg = img_no_bg[:, :, :3]
+            clustered = Utils.kMeans_cluster(img_rgb_no_bg / 255.0, n_clusters=3)
+            cv.imwrite('debug1/04_kmeans.jpg', clustered)
+            
+            # Canny Raw
+            gray_clustered = cv.cvtColor(clustered, cv.COLOR_BGR2GRAY)
+            edged_raw = cv.Canny(gray_clustered, 50, 150)
+            cv.imwrite('debug1/05_canny_raw.jpg', edged_raw)
+            
+            # Morphology (contorni finali)
+            dilated = cv.dilate(edged_raw, None, iterations=2)
+            final_edges = cv.erode(dilated, None, iterations=1)
+            cv.imwrite('debug1/06_contorni_finali.jpg', final_edges)
+            # ------------------------------------------------------------
+            
+            # Estrazione combinata Texture(LBP) + Colore(HSV) + Geometria
             combined_features = Utils.extract_svm_features(img, mask_rembg=mask)
+            
+            # Normalizzazione feature (deve usare lo stesso scaler del training)
+            if os.path.exists(SCALER_PATH):
+                scaler = joblib.load(SCALER_PATH)
+                combined_features_scaled = scaler.transform([combined_features])[0]
+            else:
+                combined_features_scaled = combined_features
             
             # --- SALVATAGGIO GRAFICO HISTOGRAMMA PER TESI ---
             plt.figure(figsize=(12, 5))
@@ -278,21 +338,24 @@ def process_image(img, path, is_ui=False):
             plt.close()
             # --------------------------------------------------
             
-            prediction = model.predict([combined_features])[0]
-            
-            if prediction == 0:
-                print(">>> RISULTATO: Scarpa CONFORME (Nessun difetto rilevato)")
-            else:
-                print(">>> RISULTATO: Scarpa DIFETTOSA (Possibile anomalia rilevata)")
-                
-            # Mostra probabilità se il modello lo supporta
+            # Predizione basata sulle probabilità per massima coerenza
             if hasattr(model, "predict_proba"):
-                probs = model.predict_proba([combined_features])[0]
-                # Mapping corretto basato sui nomi delle classi del modello
+                probs = model.predict_proba([combined_features_scaled])[0]
                 class_probs = {int(c): p for c, p in zip(model.classes_, probs)}
                 p_conforme = class_probs.get(0, 0.0)
                 p_difettosa = class_probs.get(1, 0.0)
+                
+                if p_conforme >= p_difettosa:
+                    print(">>> RISULTATO: Scarpa CONFORME (Nessun difetto rilevato)")
+                else:
+                    print(">>> RISULTATO: Scarpa DIFETTOSA (Possibile anomalia rilevata)")
                 print(f"Probabilità - Conforme: {p_conforme:.2%}, Difettosa: {p_difettosa:.2%}")
+            else:
+                prediction = model.predict([combined_features_scaled])[0]
+                if prediction == 0:
+                    print(">>> RISULTATO: Scarpa CONFORME (Nessun difetto rilevato)")
+                else:
+                    print(">>> RISULTATO: Scarpa DIFETTOSA (Possibile anomalia rilevata)")
         except Exception as e:
             print(f"[AVVISO] Errore durante la predizione SVM: {e}")
     else:
@@ -300,13 +363,22 @@ def process_image(img, path, is_ui=False):
 
     # 4. Calcola Dimensioni Industriali Simulare
     print("\nCALCOLO DIMENSIONI E TAGLIA (Simulazione Industriale)...")
-    length_mm, width_mm, bounding_box = Utils.calc_industrial_size(mask)
+    length_mm, width_mm, bounding_box = Utils.calc_industrial_size(mask, pixel_per_mm=cfg.PIXEL_PER_MM)
     
     if bounding_box:
         sole_size_cm = length_mm / 10
         print(f"Dimensioni stimate (Calibrazione Virtuale): L {length_mm:.1f}mm - W {width_mm:.1f}mm")
         size = Utils.getSizeFromLength(sole_size_cm)
         print(f"Taglia stimata -> EU: {size['EU']}  US: {size['US']}  UK: {size['UK']}")
+        
+        # --- SANITY CHECK: Aspect Ratio (Lunghezza / Larghezza) ---
+        length = max(length_mm, width_mm)
+        width = min(length_mm, width_mm)
+        aspect_ratio = length / width if width > 0 else 0
+        
+        if aspect_ratio < 1.8 or aspect_ratio > 4.2:
+            print(f"[AVVISO] Rapporto d'aspetto anomalo ({aspect_ratio:.1f}). L'oggetto potrebbe NON essere una scarpa.")
+        # ---------------------------------------------------------
         
         # Disegno quote per demo / tesi
         x, y, w, h = bounding_box
@@ -315,6 +387,12 @@ def process_image(img, path, is_ui=False):
         cv.putText(blueprint_img, f"L: {length_mm:.1f}mm", (x, max(y - 10, 20)), cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         cv.putText(blueprint_img, f"W: {width_mm:.1f}mm", (min(x + w + 10, TARGET_WIDTH - 150), y + h // 2), cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         cv.imwrite('debug1/04_dimensions.jpg', blueprint_img)
+        if callback: callback('debug1/04_dimensions.jpg')
+        
+        # Variante tecnica: Bounding Box sulla maschera binaria
+        mask_blueprint = cv.cvtColor(mask, cv.COLOR_GRAY2BGR)
+        cv.rectangle(mask_blueprint, (x, y), (x+w, y+h), (0, 255, 0), 3)
+        cv.imwrite('debug1/04b_mask_dimensions.jpg', mask_blueprint)
     else:
         print("[ATTENZIONE] Impossibile calcolare dimensioni: maschera vuota.")
 
@@ -362,6 +440,34 @@ def process_image(img, path, is_ui=False):
         match_img = cv.imread(best_match["path_contorno"])
 
         if match_img is not None:
+            # --- GENERAZIONE GRAFICI TESI (CAP. 2.6) ---
+            print("[INFO] Generazione analisi strutturale per la tesi...")
+            
+            # 1. Mappa SSIM Diff
+            ssim_diff = Compare.get_ssim_diff(temp_contour_path, best_match["path_contorno"])
+            if ssim_diff is not None:
+                cv.imwrite('debug1/thesis_04_ssim_map.jpg', ssim_diff)
+            
+            # 2. Confronto Istogrammi HSV
+            img1 = cv.imread(temp_contour_path)
+            img2 = cv.imread(best_match["path_contorno"])
+            if img1 is not None and img2 is not None:
+                hsv1 = cv.cvtColor(cv.resize(img1, (700, 1000)), cv.COLOR_BGR2HSV)
+                hsv2 = cv.cvtColor(cv.resize(img2, (700, 1000)), cv.COLOR_BGR2HSV)
+                # Istogrammi 1D su H per visualizzazione semplice
+                hist1 = cv.calcHist([hsv1], [0], None, [180], [0, 180])
+                hist2 = cv.calcHist([hsv2], [0], None, [180], [0, 180])
+                plt.figure(figsize=(10, 4))
+                plt.plot(hist1, label='Input', color='blue', alpha=0.8)
+                plt.plot(hist2, label='Database', color='red', linestyle='--', alpha=0.6)
+                plt.fill_between(range(180), hist1.flatten(), color='blue', alpha=0.1)
+                plt.fill_between(range(180), hist2.flatten(), color='red', alpha=0.1)
+                plt.title(f'Confronto Cromatico: Input vs {best_match["nome"]}')
+                plt.legend()
+                plt.savefig('debug1/thesis_05_hsv_comparison.png', dpi=150, bbox_inches='tight')
+                plt.close()
+            # -------------------------------------------
+
             fixed_size = (TARGET_WIDTH, TARGET_HEIGHT)
             extra_padding = (50, 50)
             input_resized = Utils.resize_keep_aspect(input_img, fixed_size, extra_padding)
@@ -369,6 +475,7 @@ def process_image(img, path, is_ui=False):
             comparison = np.hstack([input_resized, match_resized])
 
             cv.imwrite('debug1/06_comparison.jpg', comparison)
+            if callback: callback('debug1/06_comparison.jpg')
             
             if not is_ui:
                 # Non bloccare il programma se siamo in modalità UI
@@ -377,7 +484,7 @@ def process_image(img, path, is_ui=False):
                 cv.waitKey(2000) # Aspetta 2 secondi anziché all'infinito
                 # cv.destroyAllWindows() # Evitiamo di chiudere subito per permettere all'utente di vedere
             else:
-                print("[INFO] Matro trovato. Confronto salvato in debug1/06_comparison.jpg")
+                print(f"[INFO] Match trovato: {best_match['nome']}. Confronto salvato in debug1/06_comparison.jpg")
 
     else:
         print(f"\n{'=' * 50}")

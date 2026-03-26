@@ -16,6 +16,11 @@ __pycache__/
 !/output/.gitkeep
 /dbimage/*
 !/dbimage/.gitkeep
+bottle/
+capitolo2/
+favicon.ico
+img_scarpe/
+
 
 # Legacy/Extra
 /cod_inutile/

@@ -5,6 +5,7 @@ import Config
 import Homography
 import Utils
 from rembg import remove
+import config_settings as cfg
 
 def bulk_import():
     print("\n" + "=" * 50)
@@ -22,10 +23,10 @@ def bulk_import():
         return
 
     files = [f for f in os.listdir(input_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
-    valid_files = [f for f in files if f.startswith(('scarpa', 'difetto'))]
+    valid_files = [f for f in files if f.startswith(('bottiglia', 'difetto'))]
 
     if not valid_files:
-        print(f"[AVVISO] Nessun file che inizia con 'scarpa' o 'difetto' trovato in '{input_dir}'.")
+        print(f"[AVVISO] Nessun file che inizia con 'bottiglia' o 'difetto' trovato in '{input_dir}'.")
         return
 
     print(f"\nTrovati {len(valid_files)} file da importare.")
@@ -58,8 +59,8 @@ def bulk_import():
             print(f"  [ERRORE] Impossibile caricare {filename}")
             continue
             
-        # 1. Normalizzazione dimensioni (700x1000 come nel Main)
-        img = Homography.ensure_standard_size(img, (700, 1000))
+        # 1. Normalizzazione dimensioni centralizzata
+        img = Homography.ensure_standard_size(img, (cfg.TARGET_WIDTH, cfg.TARGET_HEIGHT))
         
         # 1b. Rimozione Sfondo tramite rembg
         print(f"  [INFO] Rimozione sfondo in corso...")
@@ -72,20 +73,12 @@ def bulk_import():
         # rembg restituisce RGBA, estraiamo la maschera dall'alpha channel
         mask_rembg = img_no_bg[:, :, 3]
         
-        # 2. Estrazione maschera rembg (già calcolata)
-        mask_rembg = img_no_bg[:, :, 3]
-        
-        # Creazione immagine "High Detail" (Scarpa originale + Bordi interni su sfondo nero)
-        shoe_only = cv2.bitwise_and(img, img, mask=mask_rembg)
-        gray_shoe = cv2.cvtColor(shoe_only, cv2.COLOR_BGR2GRAY)
-        internal_edges = cv2.Canny(gray_shoe, 50, 150)
-        
-        reference_img = shoe_only.copy()
-        reference_img[internal_edges > 0] = [255, 255, 255] # Overlay bordi bianchi
+        # Creazione immagine "High Detail" centralizzata in Utils
+        reference_img = Utils.generate_high_detail_reference(img, mask_rembg)
         
         # 3. Salvataggio riferimento scarpa pulita
         next_id = Config.get_next_id()
-        reference_path = f"images/scarpa_contorni_{next_id}.jpg"
+        reference_path = f"images/bottiglia_contorni_{next_id}.jpg"
         cv2.imwrite(reference_path, reference_img)
         
         # 4. Salvataggio nel database

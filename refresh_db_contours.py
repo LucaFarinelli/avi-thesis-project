@@ -1,88 +1,74 @@
 import cv2
-import numpy as np
 import os
-import mysql.connector
-from rembg import remove
 import Config
-import Homography
 import Utils
+import Homography
+from rembg import remove
+import config_settings as cfg
 
-def refresh_contours():
+def refresh_all_contours():
+    """
+    Rigenera l'immagine di riferimento strutturale per tutti i record nel database con le nuove logiche.
+    Molto utile se si cambiano i parametri di Canny o le dimensioni target nel config, senza dover
+    reimportare tutte le immagini daccapo.
+    """
     print("\n" + "=" * 50)
-    print("UTILITY DI REFRESH CONTORNI DATABASE (AI-BASED)")
+    print("SISTEMA DI RIGENERAZIONE CONTORNI DATABASE")
     print("=" * 50)
-    print("\nQuesto script rigenererà tutti i contorni nel database usando rembg.")
-    print("Verranno creati contorni puliti su sfondo nero per un matching coerente.")
     
-    confirm = input("\nVuoi procedere? (s/n): ").lower()
-    if confirm != 's':
-        return
-
-    conn = mysql.connector.connect(**Config.DB_CONFIG)
+    conn = Config._get_connection()
     cursor = conn.cursor()
-
-    # Recupera tutti i record
-    query = "SELECT idScarpa, nome_scarpa, path_originale, path_contorno FROM dataset"
-    cursor.execute(query)
-    shoes = cursor.fetchall()
-    
-    print(f"\nTrovati {len(shoes)} record da aggiornare.\n")
-
-    TARGET_WIDTH = 700
-    TARGET_HEIGHT = 1000
-
-    updated_count = 0
-    for shoe in shoes:
-        id_scarpa, nome, path_orig, path_cont = shoe
-        
-        print(f"Aggiornamento ID {id_scarpa}: {nome}...")
-        
-        if not os.path.exists(path_orig):
-            print(f"  [ERRORE] File originale non trovato: {path_orig}")
-            continue
-
-        # Carica immagine originale
-        img = cv2.imread(path_orig)
-        if img is None:
-            print(f"  [ERRORE] Impossibile caricare {path_orig}")
-            continue
-
-        # 1. Normalizzazione (stesse dimensioni di Main e Bulk Importer)
-        img = Homography.ensure_standard_size(img, (TARGET_WIDTH, TARGET_HEIGHT))
-        
-        # 2. Rimozione sfondo AI
-        try:
-            img_no_bg = remove(img)
-            mask = img_no_bg[:, :, 3] # Canale Alpha
-            
-            # 3. Creazione immagine "High Detail" (Scarpa originale + Bordi interni su sfondo nero)
-            # Questo permette un matching basato sui colori e dettagli strutturali (lacci, loghi).
-            shoe_only = cv2.bitwise_and(img, img, mask=mask)
-            gray_shoe = cv2.cvtColor(shoe_only, cv2.COLOR_BGR2GRAY)
-            internal_edges = cv2.Canny(gray_shoe, 50, 150)
-            
-            clean_shoe_img = shoe_only.copy()
-            clean_shoe_img[internal_edges > 0] = [255, 255, 255] # Overlay bordi bianchi
-            
-            # 5. Sovrascrittura file contorno esistente
-            # Se il path nel DB è nullo, ne creiamo uno nuovo
-            if not path_cont:
-                path_cont = f"images/scarpa_contorni_{id_scarpa}.jpg"
-                cursor.execute("UPDATE dataset SET path_contorno = %s WHERE idScarpa = %s", (path_cont, id_scarpa))
-            
-            cv2.imwrite(path_cont, clean_shoe_img)
-            print(f"  [OK] Riferimento aggiornato (Full Detail) in: {path_cont}")
-            updated_count += 1
-            
-        except Exception as e:
-            print(f"  [ERRORE] Durante l'elaborazione AI: {e}")
-
-    conn.commit()
+    cursor.execute("SELECT idScarpa, path_originale FROM dataset")
+    rows = cursor.fetchall()
     conn.close()
-
+    
+    if not rows:
+        print("[AVVISO] Nessun record trovato nel database.")
+        return
+        
+    print(f"Inizio aggiornamento di {len(rows)} record...\n")
+    
+    success_count = 0
+    
+    for shoe_id, orig_path in rows:
+        print(f"Aggiornamento ID {shoe_id} ({orig_path})...")
+        if not os.path.exists(orig_path):
+            print(f"  [ERRORE] File originale non trovato. Salto.")
+            continue
+        
+        # Carica e normalizza
+        img = cv2.imread(orig_path)
+        if img is None:
+            print(f"  [ERRORE] Impossibile leggere il file.")
+            continue
+        
+        # 1. Normalizza con config
+        img = Homography.ensure_standard_size(img, (cfg.TARGET_WIDTH, cfg.TARGET_HEIGHT))
+        
+        # 2. Rimozione sfondo
+        img_no_bg = remove(img)
+        mask_rembg = img_no_bg[:, :, 3]
+        
+        # 3. Generazione High Detail centralizzata
+        reference_img = Utils.generate_high_detail_reference(img, mask_rembg)
+        
+        # 4. Salva il nuovo riferimento
+        new_contour_path = f"images/bottiglia_contorni_{shoe_id}.jpg"
+        cv2.imwrite(new_contour_path, reference_img)
+        
+        # 5. Aggiorna nome e path nel database per sicurezza
+        conn = Config._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE dataset SET path_contorno = %s WHERE idScarpa = %s", (new_contour_path, shoe_id))
+        conn.commit()
+        conn.close()
+        
+        print(f"  [OK] Contorno aggiornato con successo.")
+        success_count += 1
+        
     print("\n" + "=" * 50)
-    print(f"REFRESH COMPLETATO: {updated_count} record aggiornati.")
+    print(f"COMPLETATO: Aggiornati con successo {success_count}/{len(rows)} record.")
     print("=" * 50)
 
 if __name__ == "__main__":
-    refresh_contours()
+    refresh_all_contours()

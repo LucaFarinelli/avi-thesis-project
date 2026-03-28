@@ -116,22 +116,27 @@ class ShoeRecognitionApp:
         options_frame.grid(row=4, column=0, sticky='nw', padx=40, pady=(0, 25))
         
         self.options_vars = {}
+        # (etichetta, chiave_flag, abilitata_default)
         options_list = [
-            "Rimozione Sfondo (AI)", "Matching Geometrico (ORB)",
-            "Analisi Colore (HSV)", "Analisi Texture (LBP)",
-            "Rilevamento Bordi (Canny)", "Analisi Forma (Hu Moments)"
+            ("Rimozione Sfondo (AI)",   "do_bg_remove",  True),
+            ("Analisi Difetti (SVM)",   "do_svm",        True),
+            ("Analisi Texture (LBP)",   "do_lbp",        True),
+            ("Analisi Colore (HSV)",    "do_hsv",        True),
+            ("Matching Database",       "do_matching",   True),
+            ("Calcolo Dimensioni",      "do_dimensions", True),
+            ("Segmentazione K-Means",   "do_kmeans",     False),
+            ("Rilevamento Bordi (Canny)","do_canny",     False),
         ]
         
-        for i, opt in enumerate(options_list):
-            var = tk.BooleanVar(value=True if i==0 else False)
-            self.options_vars[opt] = var
+        for i, (label, key, default) in enumerate(options_list):
+            var = tk.BooleanVar(value=default)
+            self.options_vars[key] = var
             cb = ttk.Checkbutton(
                 options_frame,
-                text=opt,
+                text=label,
                 variable=var,
                 style="Circular.TCheckbutton"
             )
-            # 2 colonne, 3 righe
             cb.grid(row=i // 2, column=i % 2, sticky='w', padx=(0, 40), pady=6)
 
         # --- Bottoni (impilati verticalmente, allineati a sinistra) ---
@@ -362,6 +367,10 @@ class ShoeRecognitionApp:
     def get_selected_object(self):
         """Ritorna il tipo di oggetto selezionato"""
         return self.object_var.get()
+
+    def get_options(self):
+        """Ritorna un dizionario con i flag attuali delle checkbox."""
+        return {key: var.get() for key, var in self.options_vars.items()}
     
     def update_status(self, message, color="black"):
         """Aggiorna lo stato in modo sicuro dal thread."""
@@ -398,7 +407,7 @@ class ShoeRecognitionApp:
             return
         
         thread = threading.Thread(target=self._process_image_thread, 
-                                 args=(file_path, selected_object))
+                                 args=(file_path, selected_object, self.get_options()))
         thread.start()
     
     def process_from_webcam(self):
@@ -411,10 +420,10 @@ class ShoeRecognitionApp:
         self.update_status(f"📷 Oggetto selezionato: {selected_object}", self.accent_color)
         
         thread = threading.Thread(target=self._process_webcam_thread, 
-                                 args=(selected_object,))
+                                 args=(selected_object, self.get_options()))
         thread.start()
     
-    def _process_image_thread(self, file_path, object_type):
+    def _process_image_thread(self, file_path, object_type, options):
         """Thread per elaborare immagine da file"""
         try:
             self.is_processing = True
@@ -433,7 +442,8 @@ class ShoeRecognitionApp:
             print(f"[INFO] Tipo oggetto: {object_type}")
             Main.process_image(img, file_path, is_ui=True, 
                                callback=self.update_image_display,
-                               result_callback=self.update_results_display)
+                               result_callback=self.update_results_display,
+                               options=options)
             
             self.update_status("✅ Elaborazione completata!", self.success_color)
             self.safe_messagebox("Successo", f"Elaborazione di {object_type} completata con successo!")

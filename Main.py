@@ -205,7 +205,7 @@ def acquire_image():
             continue
 
 
-def process_image(img, path, is_ui=False, callback=None, result_callback=None):
+def process_image(img, path, is_ui=False, callback=None, result_callback=None, options=None):
     """Esegue l'intera pipeline di elaborazione su un'immagine acquisita.
 
     Args:
@@ -214,10 +214,26 @@ def process_image(img, path, is_ui=False, callback=None, result_callback=None):
         is_ui: Booleano, se True disabilita cv.imshow che causano crash nei thread.
         callback: Opzionale, funzione da chiamare per aggiornare un visualizzatore esterno (UI).
         result_callback: Opzionale, funzione da chiamare con il testo riepilogativo dei risultati.
+        options: Dizionario con i flag delle operazioni scelte (es. do_svm).
     """
     print(f"\n{'=' * 50}")
     print("ELABORAZIONE IMMAGINE IN CORSO...")
     print("=" * 50)
+
+    options = options or {}
+    do_bg_remove = options.get("do_bg_remove", True)
+    do_svm = options.get("do_svm", True)
+    do_lbp = options.get("do_lbp", True)
+    do_hsv = options.get("do_hsv", True)
+    do_matching = options.get("do_matching", True)
+    do_dimensions = options.get("do_dimensions", True)
+    do_kmeans = options.get("do_kmeans", False)
+    do_canny = options.get("do_canny", False)
+
+    # Gestione dipendenze rigide
+    if not do_bg_remove:
+        do_svm = False
+        do_dimensions = False
 
     # Setup cartella debug1
     DEBUG_DIR = "debug1"
@@ -242,74 +258,81 @@ def process_image(img, path, is_ui=False, callback=None, result_callback=None):
     height, width = img.shape[:2]
 
     # 3b. Analisi texture LBP: converto in grigio (un solo canale) e calcolo il descrittore
-    img_gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-    img_lbp = Utils.lbp_vectorized(img_gray)
+    img_lbp = None
+    if do_lbp:
+        img_gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+        img_lbp = Utils.lbp_vectorized(img_gray)
+        cv.imwrite('debug1/03b_lbp.jpg', img_lbp)
 
-    cv.imwrite('debug1/03b_lbp.jpg', img_lbp)
+    # Variabili per raccogliere dati da inviare al result_callback
+    _svm_result_text = "SVM: Salto analisi (scelta utente / no rimozione sfondo)"
+    _dim_text = "Dimensioni: Salto calcolo (scelta utente / no rimozione sfondo)"
 
-    # plt.imshow(img[:, :, ::-1])  # BGR -> RGB per matplotlib
-    # plt.title("Immagine normalizzata")
-    # plt.show()
+    # Rimozione Sfondo tramite rembg per analisi precisa
+    if do_bg_remove:
+        print("[INFO] Rimozione sfondo AI (rembg) in corso...")
+        img_no_bg = remove(img)
+        cv.imwrite('debug1/02_rimozione_sfondo.png', img_no_bg) # Salvataggio per tesi (Cap. 2)
+        cv.imwrite('debug1/03_no_bg.png', img_no_bg) # Compatibilità
+        if callback: callback('debug1/02_rimozione_sfondo.png')
+        
+        # Estrazione maschera dall'alpha channel di rembg
+        mask = img_no_bg[:, :, 3]
+    else:
+        print("[INFO] Salto Rimozione sfondo AI.")
+        # Creiamo un'immagine BGRA fittizia (stessi canali di rembg) con maschera tutta bianca
+        img_no_bg = cv.cvtColor(img, cv.COLOR_BGR2BGRA)
+        mask = np.ones(img.shape[:2], dtype=np.uint8) * 255
 
-    # plt.imshow(img_lbp, cmap="gray")
-    cv.imwrite('debug1/03b_lbp.jpg', img_lbp)
+    cv.imwrite('debug1/03_maschera_alpha.jpg', mask) # Salvataggio per tesi (Cap. 2)
+    cv.imwrite('debug1/03c_mask.jpg', mask) # Compatibilità
+    
+    # --- PASSAGGI LBP PER TESI (CAP. 2.4) ---
+    if do_lbp and img_lbp is not None:
+        # Mappa LBP mascherata (solo scarpa)
+        masked_lbp = cv.bitwise_and(img_lbp, img_lbp, mask=mask)
+        cv.imwrite('debug1/03e_masked_lbp.jpg', masked_lbp)
+        
+        # Istogramma LBP puro (usando la funzione di Utils)
+        hist_lbp_only = Utils.calc_lbp_histogram(img_lbp, mask=mask)
+        plt.figure(figsize=(10, 4))
+        plt.plot(hist_lbp_only, color='blue')
+        plt.fill_between(range(256), hist_lbp_only, color='blue', alpha=0.3)
+        plt.title('Istogramma dei descrittori LBP (Firma della Texture)')
+        plt.xlabel('Codice LBP (0-255)')
+        plt.ylabel('Frequenza normalizzata')
+        plt.xlim([0, 255])
+        plt.grid(True, alpha=0.2)
+        plt.savefig('debug1/03f_lbp_histogram.png', dpi=150, bbox_inches='tight')
+        plt.close()
+    # ----------------------------------------
+    
+    # --- PASSAGGI AGGIUNTIVI PER DOCUMENTAZIONE TESI (CAP. 2) ---
+    if do_kmeans:
+        print("[INFO] Esecuzione K-Means per tesi...")
+        img_rgb_no_bg = img_no_bg[:, :, :3]
+        clustered = Utils.kMeans_cluster(img_rgb_no_bg / 255.0, n_clusters=3)
+        cv.imwrite('debug1/04_kmeans.jpg', clustered)
+    else:
+        clustered = img_no_bg[:, :, :3]
 
+    if do_canny:
+        print("[INFO] Esecuzione Rilevamento Bordi Canny per tesi...")
+        gray_clustered = cv.cvtColor(clustered, cv.COLOR_BGR2GRAY)
+        edged_raw = cv.Canny(gray_clustered, 50, 150)
+        cv.imwrite('debug1/05_canny_raw.jpg', edged_raw)
+        
+        # Morphology (contorni finali)
+        dilated = cv.dilate(edged_raw, None, iterations=2)
+        final_edges = cv.erode(dilated, None, iterations=1)
+        cv.imwrite('debug1/06_contorni_finali.jpg', final_edges)
+    # ------------------------------------------------------------
+    
     # 3c. Analisi dei difetti tramite SVM
-    if os.path.exists(MODEL_PATH):
+    if do_svm and os.path.exists(MODEL_PATH):
         try:
             print("\nANALISI DIFETTI (SVM)...")
             model = joblib.load(MODEL_PATH)
-            
-            # Rimozione Sfondo tramite rembg per analisi precisa
-            print("[INFO] Rimozione sfondo AI (rembg) in corso...")
-            img_no_bg = remove(img)
-            cv.imwrite('debug1/02_rimozione_sfondo.png', img_no_bg) # Salvataggio per tesi (Cap. 2)
-            cv.imwrite('debug1/03_no_bg.png', img_no_bg) # Compatibilità
-            if callback: callback('debug1/02_rimozione_sfondo.png')
-            
-            # Estrazione maschera dall'alpha channel di rembg
-            mask = img_no_bg[:, :, 3]
-            cv.imwrite('debug1/03_maschera_alpha.jpg', mask) # Salvataggio per tesi (Cap. 2)
-            cv.imwrite('debug1/03c_mask.jpg', mask) # Compatibilità
-            
-            # --- PASSAGGI LBP PER TESI (CAP. 2.4) ---
-            # Mappa LBP mascherata (solo scarpa)
-            masked_lbp = cv.bitwise_and(img_lbp, img_lbp, mask=mask)
-            cv.imwrite('debug1/03e_masked_lbp.jpg', masked_lbp)
-            
-            # Istogramma LBP puro (usando la funzione di Utils)
-            hist_lbp_only = Utils.calc_lbp_histogram(img_lbp, mask=mask)
-            plt.figure(figsize=(10, 4))
-            plt.plot(hist_lbp_only, color='blue')
-            plt.fill_between(range(256), hist_lbp_only, color='blue', alpha=0.3)
-            plt.title('Istogramma dei descrittori LBP (Firma della Texture)')
-            plt.xlabel('Codice LBP (0-255)')
-            plt.ylabel('Frequenza normalizzata')
-            plt.xlim([0, 255])
-            plt.grid(True, alpha=0.2)
-            plt.savefig('debug1/03f_lbp_histogram.png', dpi=150, bbox_inches='tight')
-            plt.close()
-            # ----------------------------------------
-            
-            # --- PASSAGGI AGGIUNTIVI PER DOCUMENTAZIONE TESI (CAP. 2) ---
-            print("[INFO] Generazione passaggi intermedi per la tesi...")
-            # K-Means (usando la funzione di Utils)
-            img_rgb_no_bg = img_no_bg[:, :, :3]
-            clustered = Utils.kMeans_cluster(img_rgb_no_bg / 255.0, n_clusters=3)
-            cv.imwrite('debug1/04_kmeans.jpg', clustered)
-            
-            # Canny Raw
-            gray_clustered = cv.cvtColor(clustered, cv.COLOR_BGR2GRAY)
-            edged_raw = cv.Canny(gray_clustered, 50, 150)
-            cv.imwrite('debug1/05_canny_raw.jpg', edged_raw)
-            
-            # Morphology (contorni finali)
-            dilated = cv.dilate(edged_raw, None, iterations=2)
-            final_edges = cv.erode(dilated, None, iterations=1)
-            cv.imwrite('debug1/06_contorni_finali.jpg', final_edges)
-            # ------------------------------------------------------------
-            
-            # Estrazione combinata Texture(LBP) + Colore(HSV) + Geometria
             combined_features = Utils.extract_svm_features(img, mask_rembg=mask)
             
             # Normalizzazione feature (deve usare lo stesso scaler del training)
@@ -359,48 +382,51 @@ def process_image(img, path, is_ui=False, callback=None, result_callback=None):
         except Exception as e:
             print(f"[AVVISO] Errore durante la predizione SVM: {e}")
             _svm_result_text = f"[AVVISO] Errore durante la predizione SVM: {e}"
+    elif not do_svm:
+        print("\n[AVVISO] Analisi difetti SVM disabilitata.")
     else:
         print("\n[AVVISO] Modello SVM non trovato. Salta analisi difetti.")
 
     # 4. Calcola Dimensioni Industriali Simulare
     print("\nCALCOLO DIMENSIONI E TAGLIA (Simulazione Industriale)...")
-    length_mm, width_mm, bounding_box = Utils.calc_industrial_size(mask, pixel_per_mm=cfg.PIXEL_PER_MM)
-    
-    _dim_text = "Dimensioni non calcolate: maschera vuota." # Default value
-    if bounding_box:
-        sole_size_cm = length_mm / 10
-        print(f"Dimensioni stimate (Calibrazione Virtuale): L {length_mm:.1f}mm - W {width_mm:.1f}mm")
-        size = Utils.getSizeFromLength(sole_size_cm)
-        print(f"Taglia stimata -> EU: {size['EU']}  US: {size['US']}  UK: {size['UK']}")
-        _dim_text = (
-            f"Dimensioni stimulate: L {length_mm:.1f}mm  |  W {width_mm:.1f}mm\n"
-            f"Taglia stimata  ->  EU: {size['EU']}   US: {size['US']}   UK: {size['UK']}"
-        )
+    if do_dimensions:
+        length_mm, width_mm, bounding_box = Utils.calc_industrial_size(mask, pixel_per_mm=cfg.PIXEL_PER_MM)
         
-        # --- SANITY CHECK: Aspect Ratio (Lunghezza / Larghezza) ---
-        length = max(length_mm, width_mm)
-        width = min(length_mm, width_mm)
-        aspect_ratio = length / width if width > 0 else 0
-        
-        if aspect_ratio < 1.8 or aspect_ratio > 4.2:
-            print(f"[AVVISO] Rapporto d'aspetto anomalo ({aspect_ratio:.1f}). L'oggetto potrebbe NON essere una scarpa.")
-        # ---------------------------------------------------------
-        
-        # Disegno quote per demo / tesi
-        x, y, w, h = bounding_box
-        blueprint_img = img.copy()
-        cv.rectangle(blueprint_img, (x, y), (x+w, y+h), (0, 0, 255), 2)
-        cv.putText(blueprint_img, f"L: {length_mm:.1f}mm", (x, max(y - 10, 20)), cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        cv.putText(blueprint_img, f"W: {width_mm:.1f}mm", (min(x + w + 10, TARGET_WIDTH - 150), y + h // 2), cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        cv.imwrite('debug1/04_dimensions.jpg', blueprint_img)
-        if callback: callback('debug1/04_dimensions.jpg')
-        
-        # Variante tecnica: Bounding Box sulla maschera binaria
-        mask_blueprint = cv.cvtColor(mask, cv.COLOR_GRAY2BGR)
-        cv.rectangle(mask_blueprint, (x, y), (x+w, y+h), (0, 255, 0), 3)
-        cv.imwrite('debug1/04b_mask_dimensions.jpg', mask_blueprint)
-    else:
-        print("[ATTENZIONE] Impossibile calcolare dimensioni: maschera vuota.")
+        if bounding_box:
+            sole_size_cm = length_mm / 10
+            print(f"Dimensioni stimate (Calibrazione Virtuale): L {length_mm:.1f}mm - W {width_mm:.1f}mm")
+            size = Utils.getSizeFromLength(sole_size_cm)
+            print(f"Taglia stimata -> EU: {size['EU']}  US: {size['US']}  UK: {size['UK']}")
+            _dim_text = (
+                f"Dimensioni stimulate: L {length_mm:.1f}mm  |  W {width_mm:.1f}mm\n"
+                f"Taglia stimata  ->  EU: {size['EU']}   US: {size['US']}   UK: {size['UK']}"
+            )
+            
+            # --- SANITY CHECK: Aspect Ratio (Lunghezza / Larghezza) ---
+            length = max(length_mm, width_mm)
+            width = min(length_mm, width_mm)
+            aspect_ratio = length / width if width > 0 else 0
+            
+            if aspect_ratio < 1.8 or aspect_ratio > 4.2:
+                print(f"[AVVISO] Rapporto d'aspetto anomalo ({aspect_ratio:.1f}). L'oggetto potrebbe NON essere una scarpa.")
+            # ---------------------------------------------------------
+            
+            # Disegno quote per demo / tesi
+            x, y, w, h = bounding_box
+            blueprint_img = img.copy()
+            cv.rectangle(blueprint_img, (x, y), (x+w, y+h), (0, 0, 255), 2)
+            cv.putText(blueprint_img, f"L: {length_mm:.1f}mm", (x, max(y - 10, 20)), cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            cv.putText(blueprint_img, f"W: {width_mm:.1f}mm", (min(x + w + 10, TARGET_WIDTH - 150), y + h // 2), cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            cv.imwrite('debug1/04_dimensions.jpg', blueprint_img)
+            if callback: callback('debug1/04_dimensions.jpg')
+            
+            # Variante tecnica: Bounding Box sulla maschera binaria
+            mask_blueprint = cv.cvtColor(mask, cv.COLOR_GRAY2BGR)
+            cv.rectangle(mask_blueprint, (x, y), (x+w, y+h), (0, 255, 0), 3)
+            cv.imwrite('debug1/04b_mask_dimensions.jpg', mask_blueprint)
+        else:
+            print("[ATTENZIONE] Impossibile calcolare dimensioni: maschera vuota.")
+            _dim_text = "Dimensioni: Impossibile calcolarle (oggetto non rilevato)."
 
     # 5. Estrai maschera rembg e DETTAGLI INTERNI per matching
     print("\nESTRAZIONE RIFERIMENTO DETTAGLIATO PER MATCHING...")
@@ -427,108 +453,127 @@ def process_image(img, path, is_ui=False, callback=None, result_callback=None):
 
     # 6. Cerca match nel database
     print("\nRICERCA MATCH NEL DATABASE...")
-    best_match, all_results = Match.find_best_match(temp_contour_path, "contorno")
+    if do_matching:
+        best_match, all_results = Match.find_best_match(temp_contour_path, "contorno")
+    
+        if best_match and best_match["combined"] >= SIMILARITY_THRESHOLD:
+            print(f"\n{'=' * 50}")
+            print("MATCH TROVATO")
+            print("=" * 50)
+            print(f"Modello:     {best_match['nome']}")
+            print(f"Match Globale: {best_match['combined']:.2%}")
+            print(f"  - Colore(HST): {best_match['histogram']:.2%} | Texture(SSIM): {best_match['similarity']:.2%}")
+            print(f"  - Struttura(ORB): {best_match['orb']:.2%}  | Forma(SHP):  {best_match['shape']:.2%}")
+    
+            output_path = "output/scarpa_1.jpg"
+            cv.imwrite(output_path, img)
+            print(f"[OK] Immagine salvata: {output_path}")
 
-    if best_match and best_match["combined"] >= SIMILARITY_THRESHOLD:
-        print(f"\n{'=' * 50}")
-        print("MATCH TROVATO")
-        print("=" * 50)
-        print(f"Modello:     {best_match['nome']}")
-        print(f"Match Globale: {best_match['combined']:.2%}")
-        print(f"  - Colore(HST): {best_match['histogram']:.2%} | Texture(SSIM): {best_match['similarity']:.2%}")
-        print(f"  - Struttura(ORB): {best_match['orb']:.2%}  | Forma(SHP):  {best_match['shape']:.2%}")
+            input_img = cv.imread(temp_contour_path)
+            match_img = cv.imread(best_match["path_contorno"])
+    
+            if match_img is not None:
+                # --- GENERAZIONE GRAFICI TESI (CAP. 2.6) ---
+                print("[INFO] Generazione analisi strutturale per la tesi...")
+                
+                # 1. Mappa SSIM Diff
+                ssim_diff = Compare.get_ssim_diff(temp_contour_path, best_match["path_contorno"])
+                if ssim_diff is not None:
+                    cv.imwrite('debug1/thesis_04_ssim_map.jpg', ssim_diff)
+                
+                # 2. Confronto Istogrammi HSV
+                img1 = cv.imread(temp_contour_path)
+                img2 = cv.imread(best_match["path_contorno"])
+                if img1 is not None and img2 is not None:
+                    hsv1 = cv.cvtColor(cv.resize(img1, (700, 1000)), cv.COLOR_BGR2HSV)
+                    hsv2 = cv.cvtColor(cv.resize(img2, (700, 1000)), cv.COLOR_BGR2HSV)
+                    hist1 = cv.calcHist([hsv1], [0], None, [180], [0, 180])
+                    hist2 = cv.calcHist([hsv2], [0], None, [180], [0, 180])
+                    plt.figure(figsize=(10, 4))
+                    plt.plot(hist1, label='Input', color='blue', alpha=0.8)
+                    plt.plot(hist2, label='Database', color='red', linestyle='--', alpha=0.6)
+                    plt.fill_between(range(180), hist1.flatten(), color='blue', alpha=0.1)
+                    plt.fill_between(range(180), hist2.flatten(), color='red', alpha=0.1)
+                    plt.title(f'Confronto Cromatico: Input vs {best_match["nome"]}')
+                    plt.legend()
+                    plt.savefig('debug1/thesis_05_hsv_comparison.png', dpi=150, bbox_inches='tight')
+                    plt.close()
+    
+                fixed_size = (TARGET_WIDTH, TARGET_HEIGHT)
+                extra_padding = (50, 50)
+                input_resized = Utils.resize_keep_aspect(input_img, fixed_size, extra_padding)
+                match_resized = Utils.resize_keep_aspect(match_img, fixed_size, extra_padding)
+                comparison = np.hstack([input_resized, match_resized])
+    
+                cv.imwrite('debug1/06_comparison.jpg', comparison)
+                if callback: callback('debug1/06_comparison.jpg')
 
-        output_path = "output/scarpa_1.jpg"
-        cv.imwrite(output_path, img)
-        print(f"[OK] Immagine salvata: {output_path}")
-
-        input_img = cv.imread(temp_contour_path)
-        match_img = cv.imread(best_match["path_contorno"])
-
-        if match_img is not None:
-            # --- GENERAZIONE GRAFICI TESI (CAP. 2.6) ---
-            print("[INFO] Generazione analisi strutturale per la tesi...")
+                # Invia il riepilogo completo al result_callback
+                if result_callback:
+                    summary = (
+                        f"{_svm_result_text}\n"
+                        f"{_dim_text}\n"
+                        f"\n"
+                        f"Match Trovato: {best_match['nome']}\n"
+                        f"Score Globale: {best_match['combined']:.2%}\n"
+                        f"  Colore(HSV): {best_match['histogram']:.2%}  |  Texture(SSIM): {best_match['similarity']:.2%}\n"
+                        f"  Struttura(ORB): {best_match['orb']:.2%}  |  Forma(SHP): {best_match['shape']:.2%}\n"
+                        f"\n"
+                        f"Ulteriori immagini di debug disponibili in: cartella debug1/"
+                    )
+                    result_callback(summary)
+                
+                if not is_ui:
+                    # Non bloccare il programma se siamo in modalità UI
+                    print("[INFO] Visualizzazione confronto...")
+                    cv.imshow("CONFRONTO: Input vs Database", comparison)
+                    cv.waitKey(2000) # Aspetta 2 secondi anziché all'infinito
+                    # cv.destroyAllWindows() # Evitiamo di chiudere subito per permettere all'utente di vedere
+                else:
+                    print(f"[INFO] Match trovato: {best_match['nome']}. Confronto salvato in debug1/06_comparison.jpg")
+    
+        else:
+            print(f"\n{'=' * 50}")
+            print("NUOVA SCARPA RILEVATA")
+            print("=" * 50)
+            print(f"Nessun match trovato (soglia: {SIMILARITY_THRESHOLD:.0%})")
+    
+            next_id = Config.get_next_id()
+            output_path = f"output/scarpa_{next_id}.jpg"
+            cv.imwrite(output_path, img)
+            print(f"[OK] Immagine salvata: {output_path}")
             
-            # 1. Mappa SSIM Diff
-            ssim_diff = Compare.get_ssim_diff(temp_contour_path, best_match["path_contorno"])
-            if ssim_diff is not None:
-                cv.imwrite('debug1/thesis_04_ssim_map.jpg', ssim_diff)
+            permanent_contour_path = f"images/scarpa_contorni_{next_id}.jpg"
+            cv.imwrite(permanent_contour_path, reference_img)
             
-            # 2. Confronto Istogrammi HSV
-            img1 = cv.imread(temp_contour_path)
-            img2 = cv.imread(best_match["path_contorno"])
-            if img1 is not None and img2 is not None:
-                hsv1 = cv.cvtColor(cv.resize(img1, (700, 1000)), cv.COLOR_BGR2HSV)
-                hsv2 = cv.cvtColor(cv.resize(img2, (700, 1000)), cv.COLOR_BGR2HSV)
-                hist1 = cv.calcHist([hsv1], [0], None, [180], [0, 180])
-                hist2 = cv.calcHist([hsv2], [0], None, [180], [0, 180])
-                plt.figure(figsize=(10, 4))
-                plt.plot(hist1, label='Input', color='blue', alpha=0.8)
-                plt.plot(hist2, label='Database', color='red', linestyle='--', alpha=0.6)
-                plt.fill_between(range(180), hist1.flatten(), color='blue', alpha=0.1)
-                plt.fill_between(range(180), hist2.flatten(), color='red', alpha=0.1)
-                plt.title(f'Confronto Cromatico: Input vs {best_match["nome"]}')
-                plt.legend()
-                plt.savefig('debug1/thesis_05_hsv_comparison.png', dpi=150, bbox_inches='tight')
-                plt.close()
-
-            fixed_size = (TARGET_WIDTH, TARGET_HEIGHT)
-            extra_padding = (50, 50)
-            input_resized = Utils.resize_keep_aspect(input_img, fixed_size, extra_padding)
-            match_resized = Utils.resize_keep_aspect(match_img, fixed_size, extra_padding)
-            comparison = np.hstack([input_resized, match_resized])
-
-            cv.imwrite('debug1/06_comparison.jpg', comparison)
-            if callback: callback('debug1/06_comparison.jpg')
-
-            # Invia il riepilogo completo al result_callback
+            shoe_name = input("\nInserisci nome modello scarpa: ").strip() or "Scarpa Sconosciuta"
+            
+            print("\nQuesta scarpa e' conforme o difettosa?")
+            print("   0 - Conforme (Buona)")
+            print("   1 - Difettosa (Scarto)")
+            label_input = input("Scelta (0/1, default 0): ").strip()
+            label = 1 if label_input == "1" else 0
+            
+            new_id = Config.save_to_database(shoe_name, path, permanent_contour_path, label=label)
+            
             if result_callback:
                 summary = (
                     f"{_svm_result_text}\n"
-                    f"{_dim_text}\n"
-                    f"\n"
-                    f"Match Trovato: {best_match['nome']}\n"
-                    f"Score Globale: {best_match['combined']:.2%}\n"
-                    f"  Colore(HSV): {best_match['histogram']:.2%}  |  Texture(SSIM): {best_match['similarity']:.2%}\n"
-                    f"  Struttura(ORB): {best_match['orb']:.2%}  |  Forma(SHP): {best_match['shape']:.2%}\n"
-                    f"\n"
-                    f"Ulteriori immagini di debug disponibili in: cartella debug1/"
+                    f"{_dim_text}\n\n"
+                    f"Match Non Trovato!\n"
+                    f"Immagine salvata come {shoe_name}\n"
                 )
                 result_callback(summary)
-            
-            if not is_ui:
-                # Non bloccare il programma se siamo in modalità UI
-                print("[INFO] Visualizzazione confronto...")
-                cv.imshow("CONFRONTO: Input vs Database", comparison)
-                cv.waitKey(2000) # Aspetta 2 secondi anziché all'infinito
-                # cv.destroyAllWindows() # Evitiamo di chiudere subito per permettere all'utente di vedere
-            else:
-                print(f"[INFO] Match trovato: {best_match['nome']}. Confronto salvato in debug1/06_comparison.jpg")
-
+            print(f"[OK] Nuova scarpa salvata con ID: {new_id} (Etichetta: {label})")
     else:
-        print(f"\n{'=' * 50}")
-        print("NUOVA SCARPA RILEVATA")
-        print("=" * 50)
-        print(f"Nessun match trovato (soglia: {SIMILARITY_THRESHOLD:.0%})")
-
-        next_id = Config.get_next_id()
-        output_path = f"output/scarpa_{next_id}.jpg"
-        cv.imwrite(output_path, img)
-        print(f"[OK] Immagine salvata: {output_path}")
-
-        permanent_contour_path = f"images/scarpa_contorni_{next_id}.jpg"
-        cv.imwrite(permanent_contour_path, reference_img)
-
-        shoe_name = input("\nInserisci nome modello scarpa: ").strip() or "Scarpa Sconosciuta"
-        
-        print("\nQuesta scarpa e' conforme o difettosa?")
-        print("   0 - Conforme (Buona)")
-        print("   1 - Difettosa (Scarto)")
-        label_input = input("Scelta (0/1, default 0): ").strip()
-        label = 1 if label_input == "1" else 0
-        
-        new_id = Config.save_to_database(shoe_name, path, permanent_contour_path, label=label)
-        print(f"[OK] Nuova scarpa salvata con ID: {new_id} (Etichetta: {label})")
+        print("[INFO] Matching Database disabilitato dall'utente.")
+        if result_callback:
+            summary = (
+                f"{_svm_result_text}\n"
+                f"{_dim_text}\n\n"
+                f"Matching con il Database disabilitato."
+            )
+            result_callback(summary)
 
     # Rimuovi file temporaneo
     if os.path.exists(temp_contour_path):

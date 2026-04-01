@@ -130,13 +130,57 @@ def train_svm_model():
     model = grid_search.best_estimator_
     print(f"Parametri migliori trovati: {grid_search.best_params_}")
     print(f"Score migliore (CV): {grid_search.best_score_:.2%}")
+
+    # --- CONFRONTO TRA KERNEL ---
+    print("\nConfronto tra kernel alternativi...")
+    kernels = ['linear', 'poly', 'rbf', 'sigmoid']
+    kernel_results = {}
     
-    # 6. Valutazione sul test set
+    for k in kernels:
+        model_k = SVC(kernel=k, probability=True, 
+                      class_weight='balanced', C=1.0)
+        model_k.fit(X_train, y_train)
+        y_pred_k = model_k.predict(X_test)
+        acc = accuracy_score(y_test, y_pred_k)
+        kernel_results[k] = acc
+        print(f"  Kernel {k:10s}: accuracy = {acc:.2%}")
+    
+    # 6. Valutazione sul test set con modello ottimizzato
     y_pred = model.predict(X_test)
     accuracy = accuracy_score(y_test, y_pred)
     print(f"\nAccuratezza sul test set: {accuracy:.2%}")
     print("\nReport di classificazione:")
     print(classification_report(y_test, y_pred, target_names=['Conforme', 'Difettosa']))
+    
+    # Aggiungi il risultato del modello ottimizzato al confronto
+    kernel_results['rbf*\n(ottimizzato)'] = accuracy
+    print(f"  Kernel rbf (ottimizzato): accuracy = {accuracy:.2%}")
+    
+    # Grafico confronto kernel (5 barre, ultima evidenziata)
+    colors = ['#3b82f6', '#f59e0b', '#10b981', '#ef4444', '#7c3aed']
+    plt.figure(figsize=(9, 5))
+    bars = plt.bar(kernel_results.keys(), 
+                [v * 100 for v in kernel_results.values()],
+                color=colors, edgecolor='white', linewidth=0.5)
+    # Evidenzia la barra del modello ottimizzato con un bordo
+    bars[-1].set_edgecolor('#3d0099')
+    bars[-1].set_linewidth(2)
+    plt.title('Confronto Accuratezza per Tipo di Kernel SVM\n(* parametri ottimizzati via GridSearchCV)')
+    plt.ylabel('Accuratezza (%)')
+    plt.xlabel('Kernel')
+    plt.ylim(0, 112)
+    for bar, val in zip(bars, kernel_results.values()):
+        plt.text(bar.get_x() + bar.get_width()/2, 
+                bar.get_height() + 1,
+                f'{val:.1%}', ha='center', va='bottom', fontsize=10,
+                fontweight='bold' if bar == bars[-1] else 'normal')
+    plt.grid(axis='y', alpha=0.3)
+    plt.tight_layout()
+    plt.savefig('debug1/thesis_04_kernel_comparison.png', 
+                dpi=300, bbox_inches='tight')
+    plt.close()
+    print("[OK] Grafico confronto kernel salvato.")
+    
     
     # --- GENERAZIONE GRAFICI PER LA TESI ---
     os.makedirs('debug1', exist_ok=True)
@@ -200,9 +244,13 @@ def train_svm_model():
     print(f"\n[OK] Modello salvato in: {MODEL_PATH}")
     print(f"[OK] Scaler salvato in: {SCALER_PATH}")
     print("[OK] Grafici per la tesi generati in 'debug1/':")
-    print("  - thesis_01_confusion_matrix.png")
-    print("  - thesis_02_lbp_comparison.png")
-    print("  - thesis_03_svm_pca_space.png")
+    print("  - thesis_01_confusion_matrix.png -->  matrice di confusione del modello SVM sul test set")
+    print("  - thesis_02_lbp_comparison.png --> Confronto tra la firma media (vettore feature LBP+HSV+Geometrica) dell'oggetto conforme vs difettoso")
+    print("  - thesis_03_svm_pca_space.png --> Rappresentazione Spazio SVM (PCA-ridotto a 2D)")
+    print("  - thesis_04_kernel_comparison.png --> confronto performance dei 4 kernel con parametri di default e ottimizzazzione del RBF")
+    print("  - thesis_04_ssim_map.jpg --> mappa SSIM (structura similarity index) tra immagine input e match trovato nel db")
+    print("  - thesis_05_hsv_comparison.png --> confronto istogrammi HSV (tonalità colore) tra immagine di input e match trovato nel db")
+
     return True
 
 if __name__ == "__main__":

@@ -18,7 +18,7 @@ def refresh_all_contours():
     
     conn = Config._get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT idScarpa, path_originale FROM dataset")
+    cursor.execute("SELECT id, object_type, path_originale FROM dataset")
     rows = cursor.fetchall()
     conn.close()
     
@@ -30,8 +30,9 @@ def refresh_all_contours():
     
     success_count = 0
     
-    for shoe_id, orig_path in rows:
-        print(f"Aggiornamento ID {shoe_id} ({orig_path})...")
+    for object_id, object_type, orig_path in rows:
+        object_type = object_type or "object"
+        print(f"Aggiornamento ID {object_id} ({orig_path})...")
         if not os.path.exists(orig_path):
             print(f"  [ERRORE] File originale non trovato. Salto.")
             continue
@@ -53,13 +54,16 @@ def refresh_all_contours():
         reference_img = Utils.generate_high_detail_reference(img, mask_rembg)
         
         # 4. Salva il nuovo riferimento
-        new_contour_path = f"images/bottiglia_contorni_{shoe_id}.jpg"
+        new_contour_path = f"images/{object_type}_contorni_{object_id}.jpg"
         cv2.imwrite(new_contour_path, reference_img)
         
         # 5. Aggiorna nome e path nel database per sicurezza
         conn = Config._get_connection()
         cursor = conn.cursor()
-        cursor.execute("UPDATE dataset SET path_contorno = %s WHERE idScarpa = %s", (new_contour_path, shoe_id))
+        cursor.execute(
+            "UPDATE dataset SET path_contorno = %s WHERE id = %s",
+            (new_contour_path, object_id),
+        )
         conn.commit()
         conn.close()
         

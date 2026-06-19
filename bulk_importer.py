@@ -7,13 +7,23 @@ import Utils
 from rembg import remove
 import config_settings as cfg
 
+# Prefissi file da importare (modifica qui per altri oggetti in futuro)
+ACCEPTED_PREFIXES = ("can", "difetto")
+# Prefissi che identificano la classe difettosa
+DEFECT_PREFIXES = ("difetto",)
+
 def bulk_import():
     print("\n" + "=" * 50)
     print("SISTEMA DI IMPORTAZIONE MASSIVA DATASET")
     print("=" * 50)
     
-    shoe_name = input("\nInserisci il nome del modello per queste scarpe (es. 'Nike Dunk'): ").strip()
-    if not shoe_name:
+    object_type = input("\nInserisci il tipo oggetto (es. 'shoe', 'bottle'): ").strip().lower()
+    if not object_type:
+        print("[ERRORE] Tipo oggetto necessario.")
+        return
+
+    object_name = input("Inserisci il nome del modello (es. 'Nike Dunk'): ").strip()
+    if not object_name:
         print("[ERRORE] Nome modello necessario.")
         return
 
@@ -22,11 +32,15 @@ def bulk_import():
         print(f"[ERRORE] Cartella '{input_dir}' non trovata.")
         return
 
-    files = [f for f in os.listdir(input_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
-    valid_files = [f for f in files if f.startswith(('bottiglia', 'difetto'))]
+    files = [f for f in os.listdir(input_dir) if f.lower().endswith((".jpg", ".jpeg", ".png"))]
+    valid_files = [
+        f for f in files if f.lower().startswith(ACCEPTED_PREFIXES)
+    ]
 
     if not valid_files:
-        print(f"[AVVISO] Nessun file che inizia con 'bottiglia' o 'difetto' trovato in '{input_dir}'.")
+        print(
+            f"[AVVISO] Nessun file immagine con prefissi {ACCEPTED_PREFIXES} trovato in '{input_dir}'."
+        )
         return
 
     print(f"\nTrovati {len(valid_files)} file da importare.")
@@ -48,7 +62,7 @@ def bulk_import():
         path = os.path.join(input_dir, filename)
         
         # Determina etichetta
-        label = 1 if filename.startswith('difetto') else 0
+        label = 1 if filename.lower().startswith(DEFECT_PREFIXES) else 0
         label_str = "DIFETTOSA" if label == 1 else "CONFORME"
         
         print(f"\nElaborazione: {filename} ({label_str})...")
@@ -78,11 +92,13 @@ def bulk_import():
         
         # 3. Salvataggio riferimento scarpa pulita
         next_id = Config.get_next_id()
-        reference_path = f"images/bottiglia_contorni_{next_id}.jpg"
+        reference_path = f"images/{object_type}_contorni_{next_id}.jpg"
         cv2.imwrite(reference_path, reference_img)
         
         # 4. Salvataggio nel database
-        new_id = Config.save_to_database(shoe_name, path, reference_path, label=label)
+        new_id = Config.save_to_database(
+            object_name, path, reference_path, label=label, object_type=object_type
+        )
         print(f"  [OK] Salvata con ID: {new_id}")
         imported_count += 1
 

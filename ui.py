@@ -96,7 +96,10 @@ class ShoeRecognitionApp:
         selection_frame = tk.Frame(main_frame, bg=self.bg_color)
         selection_frame.grid(row=2, column=0, sticky='w', padx=40, pady=(10,0))
 
-        self.object_options = ["Selezionare il tipo di oggetto", "Shoes", "Smartphone", "Laptop", "Watch", "Bottle"]
+        db_object_types = Config.get_available_object_types()
+        if not db_object_types:
+            db_object_types = ["shoe", "bottle"]
+        self.object_options = ["Selezionare il tipo di oggetto"] + db_object_types
         self.object_var = tk.StringVar()
         
         self.cb_object = ttk.Combobox(
@@ -396,7 +399,13 @@ class ShoeRecognitionApp:
             return
         
         selected_object = self.get_selected_object()
+        if selected_object == "Selezionare il tipo di oggetto":
+            messagebox.showwarning("Avviso", "Seleziona un tipo di oggetto valido.")
+            return
+
+        object_type = selected_object
         self.update_status(f"📂 Oggetto selezionato: {selected_object}", self.accent_color)
+        self.update_results_display("")
         
         file_path = filedialog.askopenfilename(
             initialdir="input/",
@@ -406,8 +415,10 @@ class ShoeRecognitionApp:
         if not file_path:
             return
         
-        thread = threading.Thread(target=self._process_image_thread, 
-                                 args=(file_path, selected_object, self.get_options()))
+        thread = threading.Thread(
+            target=self._process_image_thread,
+            args=(file_path, selected_object, object_type, self.get_options()),
+        )
         thread.start()
     
     def process_from_webcam(self):
@@ -417,17 +428,25 @@ class ShoeRecognitionApp:
             return
         
         selected_object = self.get_selected_object()
+        if selected_object == "Selezionare il tipo di oggetto":
+            messagebox.showwarning("Avviso", "Seleziona un tipo di oggetto valido.")
+            return
+
+        object_type = selected_object
         self.update_status(f"📷 Oggetto selezionato: {selected_object}", self.accent_color)
+        self.update_results_display("")
         
-        thread = threading.Thread(target=self._process_webcam_thread, 
-                                 args=(selected_object, self.get_options()))
+        thread = threading.Thread(
+            target=self._process_webcam_thread,
+            args=(selected_object, object_type, self.get_options()),
+        )
         thread.start()
     
-    def _process_image_thread(self, file_path, object_type, options):
+    def _process_image_thread(self, file_path, object_label, object_type, options):
         """Thread per elaborare immagine da file"""
         try:
             self.is_processing = True
-            self.update_status(f"📂 Caricamento immagine ({object_type})...", self.accent_color)
+            self.update_status(f"📂 Caricamento immagine ({object_label})...", self.accent_color)
             
             import cv2
             img = cv2.imread(file_path)
@@ -443,10 +462,11 @@ class ShoeRecognitionApp:
             Main.process_image(img, file_path, is_ui=True, 
                                callback=self.update_image_display,
                                result_callback=self.update_results_display,
-                               options=options)
+                               options=options,
+                               object_type=object_type)
             
             self.update_status("✅ Elaborazione completata!", self.success_color)
-            self.safe_messagebox("Successo", f"Elaborazione di {object_type} completata con successo!")
+            self.safe_messagebox("Successo", f"Elaborazione di {object_label} completata con successo!")
             
         except Exception as e:
             self.update_status(f"❌ Errore: {str(e)}", self.danger_color)
@@ -455,11 +475,14 @@ class ShoeRecognitionApp:
         finally:
             self.is_processing = False
     
-    def _process_webcam_thread(self, object_type):
+    def _process_webcam_thread(self, object_label, object_type, options):
         """Thread per elaborare immagine da webcam"""
         try:
             self.is_processing = True
-            self.update_status(f"📷 Cattura da webcam ({object_type})... (premi SPACE per scattare)", self.accent_color)
+            self.update_status(
+                f"📷 Cattura da webcam ({object_label})... (premi SPACE per scattare)",
+                self.accent_color,
+            )
             
             img, path = Main.capture_from_webcam()
             
@@ -472,10 +495,12 @@ class ShoeRecognitionApp:
             print(f"[INFO] Tipo oggetto: {object_type}")
             Main.process_image(img, path, is_ui=True, 
                                callback=self.update_image_display,
-                               result_callback=self.update_results_display)
+                               result_callback=self.update_results_display,
+                               options=options,
+                               object_type=object_type)
             
             self.update_status("✅ Elaborazione completata!", self.success_color)
-            self.safe_messagebox("Successo", f"Elaborazione di {object_type} completata con successo!")
+            self.safe_messagebox("Successo", f"Elaborazione di {object_label} completata con successo!")
             
         except Exception as e:
             self.update_status(f"❌ Errore: {str(e)}", self.danger_color)

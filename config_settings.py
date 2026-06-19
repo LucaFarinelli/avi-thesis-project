@@ -9,11 +9,24 @@ TARGET_WIDTH = 700
 TARGET_HEIGHT = 1000
 
 # Soglia minima di similarità combinata per considerare un match valido nel database
-SIMILARITY_THRESHOLD = 0.15
+SIMILARITY_THRESHOLD = 0.35
 
 # Percorsi dei file del modello di rilevamento difetti (SVM)
+MODEL_PATH_TEMPLATE = "{object_type}_svm_model.pkl"
+SCALER_PATH_TEMPLATE = "{object_type}_svm_scaler.pkl"
+
+# Default legacy (manteniamo per retrocompatibilita')
 MODEL_PATH = "shoe_svm_model.pkl"
 SCALER_PATH = "shoe_svm_scaler.pkl"
+
+
+def get_model_paths(object_type):
+    """Restituisce i percorsi del modello SVM per tipo oggetto."""
+    safe_type = (object_type or "shoe").lower()
+    return (
+        MODEL_PATH_TEMPLATE.format(object_type=safe_type),
+        SCALER_PATH_TEMPLATE.format(object_type=safe_type),
+    )
 
 # === PARAMETRI PER IL MATCHING VISUAL (Compare.py) ===
 # Parametri per l'estrazione delle feature orientate ai bordi
@@ -35,7 +48,7 @@ PENALTY_FACTOR = 0.5      # Moltiplicatore applicato in caso di fallimento del t
 
 # === PARAMETRI STIMA DIMENSIONALE (Utils.py) ===
 # Fattore di calibrazione simulato (Pixel/mm) a distanza telecamera fissa (Z costante)
-PIXEL_PER_MM = 2.5
+PIXEL_PER_MM = 5.3
 
 # === PARAMETRI DI TRAINING SVM (svm_trainer.py) ===
 RANDOM_SEED = 42

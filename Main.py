@@ -82,12 +82,7 @@ def capture_from_webcam():
 
         preview = cv.resize(cropped, (TARGET_WIDTH // 2, TARGET_HEIGHT // 2))
 
-        preview_display = np.full(
-            (TARGET_HEIGHT // 2 + 100, TARGET_WIDTH // 2, 3),
-            (50, 50, 50), dtype=np.uint8
-        )
-        preview_display[50:50 + (TARGET_HEIGHT // 2), :] = preview
-
+        # Disegna le guide visive PRIMA di copiare in preview_display
         cv.rectangle(
             preview,
             (50, 50), (preview.shape[1] - 50, preview.shape[0] - 50),
@@ -98,6 +93,12 @@ def capture_from_webcam():
         center_y = preview.shape[0] // 2
         cv.line(preview, (center_x, 0), (center_x, preview.shape[0]), (0, 255, 0), 1)
         cv.line(preview, (0, center_y), (preview.shape[1], center_y), (0, 255, 0), 1)
+
+        preview_display = np.full(
+            (TARGET_HEIGHT // 2 + 100, TARGET_WIDTH // 2, 3),
+            (50, 50, 50), dtype=np.uint8
+        )
+        preview_display[50:50 + (TARGET_HEIGHT // 2), :] = preview
 
         cv.putText(preview_display, "ANTEPRIMA WEBCAM", (10, 30),
                    cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
@@ -205,7 +206,15 @@ def acquire_image():
             continue
 
 
-def process_image(img, path, is_ui=False, callback=None, result_callback=None, options=None):
+def process_image(
+    img,
+    path,
+    is_ui=False,
+    callback=None,
+    result_callback=None,
+    options=None,
+    object_type=None,
+):
     """Esegue l'intera pipeline di elaborazione su un'immagine acquisita.
 
     Args:
@@ -221,6 +230,7 @@ def process_image(img, path, is_ui=False, callback=None, result_callback=None, o
     print("=" * 50)
 
     options = options or {}
+    object_type = (object_type or "shoe").lower()
     do_bg_remove = options.get("do_bg_remove", True)
     do_svm = options.get("do_svm", True)
     do_lbp = options.get("do_lbp", True)
@@ -239,8 +249,6 @@ def process_image(img, path, is_ui=False, callback=None, result_callback=None, o
     DEBUG_DIR = "debug1"
     os.makedirs(DEBUG_DIR, exist_ok=True)
     
-    # Pulizia selettiva: rimuoviamo i file delle esecuzioni precedenti
-    # MA preserviamo i grafici della tesi (prefix 'thesis_') generati dal trainer
     for f in os.listdir(DEBUG_DIR):
         if not f.startswith("thesis_") and f != ".gitkeep":
             file_path = os.path.join(DEBUG_DIR, f)
@@ -250,7 +258,7 @@ def process_image(img, path, is_ui=False, callback=None, result_callback=None, o
 
     # 1. Normalizza dimensioni (Mantiene proporzioni per simulare distanza fissa Z telecamera)
     img = Homography.ensure_standard_size(img, (TARGET_WIDTH, TARGET_HEIGHT))
-    cv.imwrite('debug1/01_originale.jpg', img) # Salvataggio per tesi (Cap. 2)
+    cv.imwrite('debug1/01_originale.jpg', img) # Salvataggio per tesi
     cv.imwrite('debug1/03_normalized.jpg', img) # Compatibilità retroattiva
     if callback: callback('debug1/01_originale.jpg')
     print(f"[OK] Immagine normalizzata a {TARGET_WIDTH}x{TARGET_HEIGHT}.")
@@ -272,7 +280,7 @@ def process_image(img, path, is_ui=False, callback=None, result_callback=None, o
     if do_bg_remove:
         print("[INFO] Rimozione sfondo AI (rembg) in corso...")
         img_no_bg = remove(img)
-        cv.imwrite('debug1/02_rimozione_sfondo.png', img_no_bg) # Salvataggio per tesi (Cap. 2)
+        cv.imwrite('debug1/02_rimozione_sfondo.png', img_no_bg) # Salvataggio per tesi
         cv.imwrite('debug1/03_no_bg.png', img_no_bg) # Compatibilità
         if callback: callback('debug1/02_rimozione_sfondo.png')
         
@@ -280,14 +288,13 @@ def process_image(img, path, is_ui=False, callback=None, result_callback=None, o
         mask = img_no_bg[:, :, 3]
     else:
         print("[INFO] Salto Rimozione sfondo AI.")
-        # Creiamo un'immagine BGRA fittizia (stessi canali di rembg) con maschera tutta bianca
         img_no_bg = cv.cvtColor(img, cv.COLOR_BGR2BGRA)
         mask = np.ones(img.shape[:2], dtype=np.uint8) * 255
 
-    cv.imwrite('debug1/03_maschera_alpha.jpg', mask) # Salvataggio per tesi (Cap. 2)
+    cv.imwrite('debug1/03_maschera_alpha.jpg', mask) 
     cv.imwrite('debug1/03c_mask.jpg', mask) # Compatibilità
     
-    # --- PASSAGGI LBP PER TESI (CAP. 2.4) ---
+    # --- PASSAGGI LBP ---
     if do_lbp and img_lbp is not None:
         # Mappa LBP mascherata (solo scarpa)
         masked_lbp = cv.bitwise_and(img_lbp, img_lbp, mask=mask)
@@ -307,7 +314,7 @@ def process_image(img, path, is_ui=False, callback=None, result_callback=None, o
         plt.close()
     # ----------------------------------------
     
-    # --- PASSAGGI AGGIUNTIVI PER DOCUMENTAZIONE TESI (CAP. 2) ---
+    # --- PASSAGGI AGGIUNTIVI PER DOCUMENTAZIONE TESI ---
     if do_kmeans:
         print("[INFO] Esecuzione K-Means per tesi...")
         img_rgb_no_bg = img_no_bg[:, :, :3]
@@ -329,15 +336,17 @@ def process_image(img, path, is_ui=False, callback=None, result_callback=None, o
     # ------------------------------------------------------------
     
     # 3c. Analisi dei difetti tramite SVM
-    if do_svm and os.path.exists(MODEL_PATH):
+    model_path, scaler_path = cfg.get_model_paths(object_type)
+
+    if do_svm and os.path.exists(model_path):
         try:
             print("\nANALISI DIFETTI (SVM)...")
-            model = joblib.load(MODEL_PATH)
+            model = joblib.load(model_path)
             combined_features = Utils.extract_svm_features(img, mask_rembg=mask)
             
             # Normalizzazione feature (deve usare lo stesso scaler del training)
-            if os.path.exists(SCALER_PATH):
-                scaler = joblib.load(SCALER_PATH)
+            if os.path.exists(scaler_path):
+                scaler = joblib.load(scaler_path)
                 combined_features_scaled = scaler.transform([combined_features])[0]
             else:
                 combined_features_scaled = combined_features
@@ -365,42 +374,47 @@ def process_image(img, path, is_ui=False, callback=None, result_callback=None, o
                 else:
                     svm_verdict = "DIFETTOSA ❌ (Possibile anomalia rilevata)"
                 _svm_result_text = (
-                    f">>> RISULTATO SVM: Scarpa {svm_verdict}\n"
+                    f">>> RISULTATO SVM: Oggetto {svm_verdict}\n"
                     f"    Probabilità  ->  Conforme: {p_conforme:.2%}   |   Difettosa: {p_difettosa:.2%}"
                 )
                 if p_conforme >= p_difettosa:
-                    print(">>> RISULTATO: Scarpa CONFORME (Nessun difetto rilevato)")
+                    print(">>> RISULTATO: Oggetto CONFORME (Nessun difetto rilevato)")
                 else:
-                    print(">>> RISULTATO: Scarpa DIFETTOSA (Possibile anomalia rilevata)")
+                    print(">>> RISULTATO: Oggetto DIFETTOSO (Possibile anomalia rilevata)")
                 print(f"Probabilità - Conforme: {p_conforme:.2%}, Difettosa: {p_difettosa:.2%}")
             else:
                 prediction = model.predict([combined_features_scaled])[0]
                 if prediction == 0:
-                    print(">>> RISULTATO: Scarpa CONFORME (Nessun difetto rilevato)")
+                    print(">>> RISULTATO: Oggetto CONFORME (Nessun difetto rilevato)")
                 else:
-                    print(">>> RISULTATO: Scarpa DIFETTOSA (Possibile anomalia rilevata)")
+                    print(">>> RISULTATO: Oggetto DIFETTOSO (Possibile anomalia rilevata)")
         except Exception as e:
             print(f"[AVVISO] Errore durante la predizione SVM: {e}")
             _svm_result_text = f"[AVVISO] Errore durante la predizione SVM: {e}"
     elif not do_svm:
         print("\n[AVVISO] Analisi difetti SVM disabilitata.")
     else:
-        print("\n[AVVISO] Modello SVM non trovato. Salta analisi difetti.")
+        print(f"\n[AVVISO] Modello SVM non trovato per '{object_type}'. Salta analisi difetti.")
 
     # 4. Calcola Dimensioni Industriali Simulare
-    print("\nCALCOLO DIMENSIONI E TAGLIA (Simulazione Industriale)...")
+    if object_type == "shoe":
+        print("\nCALCOLO DIMENSIONI E TAGLIA (Simulazione Industriale)...")
+    else:
+        print("\nCALCOLO DIMENSIONI (Simulazione Industriale)...")
     if do_dimensions:
         length_mm, width_mm, bounding_box = Utils.calc_industrial_size(mask, pixel_per_mm=cfg.PIXEL_PER_MM)
         
         if bounding_box:
             sole_size_cm = length_mm / 10
             print(f"Dimensioni stimate (Calibrazione Virtuale): L {length_mm:.1f}mm - W {width_mm:.1f}mm")
-            size = Utils.getSizeFromLength(sole_size_cm)
-            print(f"Taglia stimata -> EU: {size['EU']}  US: {size['US']}  UK: {size['UK']}")
-            _dim_text = (
-                f"Dimensioni stimulate: L {length_mm:.1f}mm  |  W {width_mm:.1f}mm\n"
-                f"Taglia stimata  ->  EU: {size['EU']}   US: {size['US']}   UK: {size['UK']}"
-            )
+            _dim_text = f"Dimensioni stimate: L {length_mm:.1f}mm  |  W {width_mm:.1f}mm"
+            if object_type == "shoe":
+                size = Utils.getSizeFromLength(sole_size_cm)
+                print(f"Taglia stimata -> EU: {size['EU']}  US: {size['US']}  UK: {size['UK']}")
+                _dim_text = (
+                    f"{_dim_text}\n"
+                    f"Taglia stimata  ->  EU: {size['EU']}   US: {size['US']}   UK: {size['UK']}"
+                )
             
             # --- SANITY CHECK: Aspect Ratio (Lunghezza / Larghezza) ---
             length = max(length_mm, width_mm)
@@ -411,7 +425,7 @@ def process_image(img, path, is_ui=False, callback=None, result_callback=None, o
                 print(f"[AVVISO] Rapporto d'aspetto anomalo ({aspect_ratio:.1f}). L'oggetto potrebbe NON essere una scarpa.")
             # ---------------------------------------------------------
             
-            # Disegno quote per demo / tesi
+            # Disegno quote per tesi
             x, y, w, h = bounding_box
             blueprint_img = img.copy()
             cv.rectangle(blueprint_img, (x, y), (x+w, y+h), (0, 0, 255), 2)
@@ -454,7 +468,9 @@ def process_image(img, path, is_ui=False, callback=None, result_callback=None, o
     # 6. Cerca match nel database
     print("\nRICERCA MATCH NEL DATABASE...")
     if do_matching:
-        best_match, all_results = Match.find_best_match(temp_contour_path, "contorno")
+        best_match, all_results = Match.find_best_match(
+            temp_contour_path, "contorno", object_type=object_type
+        )
     
         if best_match and best_match["combined"] >= SIMILARITY_THRESHOLD:
             print(f"\n{'=' * 50}")
@@ -473,7 +489,7 @@ def process_image(img, path, is_ui=False, callback=None, result_callback=None, o
             match_img = cv.imread(best_match["path_contorno"])
     
             if match_img is not None:
-                # --- GENERAZIONE GRAFICI TESI (CAP. 2.6) ---
+                # --- GENERAZIONE GRAFICI TESI ---
                 print("[INFO] Generazione analisi strutturale per la tesi...")
                 
                 # 1. Mappa SSIM Diff
@@ -534,19 +550,22 @@ def process_image(img, path, is_ui=False, callback=None, result_callback=None, o
     
         else:
             print(f"\n{'=' * 50}")
-            print("NUOVA SCARPA RILEVATA")
+            print("NUOVO OGGETTO RILEVATO")
             print("=" * 50)
             print(f"Nessun match trovato (soglia: {SIMILARITY_THRESHOLD:.0%})")
     
             next_id = Config.get_next_id()
-            output_path = f"output/scarpa_{next_id}.jpg"
+            output_path = f"output/{object_type}_{next_id}.jpg"
             cv.imwrite(output_path, img)
             print(f"[OK] Immagine salvata: {output_path}")
             
-            permanent_contour_path = f"images/scarpa_contorni_{next_id}.jpg"
+            permanent_contour_path = f"images/{object_type}_contorni_{next_id}.jpg"
             cv.imwrite(permanent_contour_path, reference_img)
             
-            shoe_name = input("\nInserisci nome modello scarpa: ").strip() or "Scarpa Sconosciuta"
+            object_name = (
+                input(f"\nInserisci nome modello ({object_type}): ").strip()
+                or f"{object_type.capitalize()} Sconosciuto"
+            )
             
             print("\nQuesta scarpa e' conforme o difettosa?")
             print("   0 - Conforme (Buona)")
@@ -554,17 +573,23 @@ def process_image(img, path, is_ui=False, callback=None, result_callback=None, o
             label_input = input("Scelta (0/1, default 0): ").strip()
             label = 1 if label_input == "1" else 0
             
-            new_id = Config.save_to_database(shoe_name, path, permanent_contour_path, label=label)
+            new_id = Config.save_to_database(
+                object_name,
+                path,
+                permanent_contour_path,
+                label=label,
+                object_type=object_type,
+            )
             
             if result_callback:
                 summary = (
                     f"{_svm_result_text}\n"
                     f"{_dim_text}\n\n"
                     f"Match Non Trovato!\n"
-                    f"Immagine salvata come {shoe_name}\n"
+                    f"Immagine salvata come {object_name}\n"
                 )
                 result_callback(summary)
-            print(f"[OK] Nuova scarpa salvata con ID: {new_id} (Etichetta: {label})")
+            print(f"[OK] Nuovo oggetto salvato con ID: {new_id} (Etichetta: {label})")
     else:
         print("[INFO] Matching Database disabilitato dall'utente.")
         if result_callback:

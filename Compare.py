@@ -123,7 +123,7 @@ def get_ssim_diff(img1_path, img2_path):
     g1 = cv.cvtColor(cv.resize(img1, target_size), cv.COLOR_BGR2GRAY)
     g2 = cv.cvtColor(cv.resize(img2, target_size), cv.COLOR_BGR2GRAY)
     
-    # Gaussian blur per ridurre il rumore come descritto nel testo della tesi
+    # Gaussian blur per ridurre il rumore
     g1 = cv.GaussianBlur(g1, (3, 3), 0)
     g2 = cv.GaussianBlur(g2, (3, 3), 0)
 

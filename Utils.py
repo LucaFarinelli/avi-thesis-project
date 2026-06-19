@@ -104,10 +104,6 @@ def lbp_vectorized(img):
         # Usiamo il padding per gestire i bordi
         shifted = np.roll(img, shift=(-dy, -dx), axis=(0, 1))
         
-        # Gestione bordi: i pixel traslati che "rientrano" dall'altro lato vanno ignorati
-        # ma per semplicità e velocità in questo contesto di texture può bastare cv2.copyMakeBorder
-        # o semplicemente usare fette:
-        
         # Confronto con il centro
         mask = (shifted >= img).astype(np.uint8)
         lbp += mask * p
@@ -176,7 +172,7 @@ def extract_svm_features(img, mask_rembg=None):
     gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
     
     # 3a. Edge Density: rapporto tra pixel di bordo e pixel totali dell'oggetto
-    # Un oggetto rotto/strappato ha MOLTI più bordi interni
+    # Un oggetto rotto/strappato ha più bordi interni
     shoe_gray = cv.bitwise_and(gray, gray, mask=mask_rembg)
     edges = cv.Canny(shoe_gray, 50, 150)
     total_pixels = np.count_nonzero(mask_rembg)
@@ -184,7 +180,7 @@ def extract_svm_features(img, mask_rembg=None):
     edge_density = edge_pixels / (total_pixels + 1e-7)
     
     # 3b. Compattezza del contorno: quanto è "regolare" la forma
-    # Oggetti integri hanno contorni lisci (compattezza alta), piegati/rotti hanno contorni frastagliati
+    # Oggetti integri hanno contorni lisci, piegati/rotti hanno contorni frastagliati
     contours, _ = cv.findContours(mask_rembg, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
     compactness = 0.0
     solidity = 0.0

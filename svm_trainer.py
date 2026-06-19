@@ -48,9 +48,16 @@ def augment_image(img, mask):
 def train_svm_model():
     print("Avvio addestramento SVM per rilevamento difetti...")
     print("(con Data Augmentation e ottimizzazione parametri)\n")
+
+    object_type = input("Tipo oggetto per il training (es. 'shoe', 'bottle'): ").strip().lower()
+    if not object_type:
+        print("[ERRORE] Tipo oggetto necessario.")
+        return False
+
+    model_path, scaler_path = cfg.get_model_paths(object_type)
     
     # 1. Recupera i dati dal database
-    data = Config.get_all_labeled_data()
+    data = Config.get_all_labeled_data(object_type=object_type)
     
     if not data or len(data) < 2:
         print("[ERRORE] Dati insufficienti per l'addestramento. Servono almeno 2 campioni.")
@@ -65,7 +72,10 @@ def train_svm_model():
     if skipped > 0:
         print(f"[AVVISO] {skipped} file non trovati, verranno saltati.")
     
-    print(f"Campioni validi: {len(valid_data)} (Augmentation x4 = {len(valid_data) * 4} totali)")
+    print(
+        f"Campioni validi ({object_type}): {len(valid_data)} "
+        f"(Augmentation x4 = {len(valid_data) * 4} totali)"
+    )
     
     # 2. Estrazione feature con Data Augmentation
     for i, (path, label) in enumerate(valid_data):
@@ -182,7 +192,7 @@ def train_svm_model():
     print("[OK] Grafico confronto kernel salvato.")
     
     
-    # --- GENERAZIONE GRAFICI PER LA TESI ---
+    # --- GENERAZIONE GRAFICI ---
     os.makedirs('debug1', exist_ok=True)
     
     # 1. Matrice di Confusione
@@ -239,10 +249,10 @@ def train_svm_model():
         plt.close()
 
     # 7. Salvataggio Modello e Scaler
-    joblib.dump(model, MODEL_PATH)
-    joblib.dump(scaler, SCALER_PATH)
-    print(f"\n[OK] Modello salvato in: {MODEL_PATH}")
-    print(f"[OK] Scaler salvato in: {SCALER_PATH}")
+    joblib.dump(model, model_path)
+    joblib.dump(scaler, scaler_path)
+    print(f"\n[OK] Modello salvato in: {model_path}")
+    print(f"[OK] Scaler salvato in: {scaler_path}")
     print("[OK] Grafici per la tesi generati in 'debug1/':")
     print("  - thesis_01_confusion_matrix.png -->  matrice di confusione del modello SVM sul test set")
     print("  - thesis_02_lbp_comparison.png --> Confronto tra la firma media (vettore feature LBP+HSV+Geometrica) dell'oggetto conforme vs difettoso")

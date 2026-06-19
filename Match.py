@@ -6,7 +6,12 @@ from Compare import compare_images
 import config_settings as cfg
 
 
-def find_best_match(input_image_path, comparison_type="contorno", exclude_recent_seconds=10):
+def find_best_match(
+    input_image_path,
+    comparison_type="contorno",
+    exclude_recent_seconds=10,
+    object_type=None,
+):
     """Trova la scarpa più simile nel database.
 
     Esclude le scarpe inserite negli ultimi `exclude_recent_seconds` secondi
@@ -25,12 +30,21 @@ def find_best_match(input_image_path, comparison_type="contorno", exclude_recent
     conn = mysql.connector.connect(**DB_CONFIG)
     cursor = conn.cursor()
 
-    query = """
-    SELECT idScarpa, nome_scarpa, path_originale, path_contorno
-    FROM dataset
-    WHERE created_at < DATE_SUB(NOW(), INTERVAL %s SECOND)
-    """
-    cursor.execute(query, (exclude_recent_seconds,))
+    if object_type:
+        query = """
+        SELECT id, object_name, path_originale, path_contorno
+        FROM dataset
+        WHERE object_type = %s
+          AND created_at < DATE_SUB(NOW(), INTERVAL %s SECOND)
+        """
+        cursor.execute(query, (object_type, exclude_recent_seconds))
+    else:
+        query = """
+        SELECT id, object_name, path_originale, path_contorno
+        FROM dataset
+        WHERE created_at < DATE_SUB(NOW(), INTERVAL %s SECOND)
+        """
+        cursor.execute(query, (exclude_recent_seconds,))
     shoes = cursor.fetchall()
     conn.close()
 
@@ -39,7 +53,7 @@ def find_best_match(input_image_path, comparison_type="contorno", exclude_recent
     results = []
 
     for shoe in shoes:
-        shoe_id, nome, path_orig, path_cont = shoe
+        object_id, object_name, path_orig, path_cont = shoe
 
         compare_path = path_cont if comparison_type == "contorno" else path_orig
 
@@ -59,7 +73,7 @@ def find_best_match(input_image_path, comparison_type="contorno", exclude_recent
         if shape_score < cfg.SHAPE_PENALTY_THRESHOLD or orb_score < cfg.ORB_PENALTY_THRESHOLD:
             str_penalty = cfg.PENALTY_FACTOR
             
-        # Media pesata strutturata dai config (Diamo più peso a Colore e SSIM, ma ORB/Shape fungono da validatori)
+        # Media pesata strutturata dai config
         combined_score = (
             (sim_score * cfg.WEIGHT_SIMILARITY) +
             (hist_score * cfg.WEIGHT_HISTOGRAM) +
@@ -68,8 +82,8 @@ def find_best_match(input_image_path, comparison_type="contorno", exclude_recent
         ) * str_penalty
 
         results.append({
-            "id": shoe_id,
-            "nome": nome,
+            "id": object_id,
+            "nome": object_name,
             "similarity": sim_score,
             "histogram": hist_score,
             "orb": orb_score,
